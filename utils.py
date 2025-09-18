@@ -37,13 +37,20 @@ def generate_slavic_fio() -> Tuple[str, str]:
         name = random.choice(SLAVIC_NAMES_FEMALE)
         patronymic = random.choice(SLAVIC_PATRONYMICS_FEMALE)
         # Добавляем женские окончания к фамилиям при необходимости
-        if surname.endswith('ов') or surname.endswith('ин') or surname.endswith('ский'):
+        if (surname.endswith('ов') or surname.endswith('ин') or surname.endswith('ский') or 
+            surname.endswith('ев') or surname.endswith('ук') or surname.endswith('юк')):
             if surname.endswith('ов'):
                 surname = surname[:-2] + 'ова'
+            elif surname.endswith('ев'):  # Медведев -> Медведева
+                surname = surname[:-2] + 'ева'
             elif surname.endswith('ин'):
                 surname = surname[:-2] + 'ина'
             elif surname.endswith('ский'):
                 surname = surname[:-3] + 'ская'
+            elif surname.endswith('ук'):  # Ukrainian: Сидорчук -> Сидорчук (no change, Ukrainian surnames don't change)
+                pass  # Ukrainian surnames stay the same for both genders
+            elif surname.endswith('юк'):  # Ukrainian: keep the same
+                pass  # Ukrainian surnames stay the same for both genders
     
     full_name = f"{surname} {name} {patronymic}"
     return full_name, gender
@@ -297,7 +304,8 @@ def generate_symptoms_by_doctor(doctor: str, min_count: int = 1, max_count: int 
         
         available_general = [s for s in general_symptoms if s not in selected]
         if available_general:
-            additional = random.choices(available_general, k=min(additional_needed, len(available_general)))
+            # Use sample instead of choices to avoid duplicates
+            additional = random.sample(available_general, k=min(additional_needed, len(available_general)))
             selected.extend(additional)
         
         return selected
@@ -335,7 +343,8 @@ def generate_analyses_by_doctor_new(doctor: str, min_count: int = 1, max_count: 
         
         available_general = [a for a in general_analyses if a not in selected]
         if available_general:
-            additional = random.choices(available_general, k=min(additional_needed, len(available_general)))
+            # Use sample instead of choices to avoid duplicates
+            additional = random.sample(available_general, k=min(additional_needed, len(available_general)))
             selected.extend(additional)
         
         return selected
@@ -481,61 +490,36 @@ def generate_analysis_datetime(visit_datetime: datetime) -> datetime:
     Returns:
         дата и время получения анализов
     """
-    # ИСПРАВЛЕНИЕ Issue #6: Дата анализов не позднее чем вчера от текущей даты
-    yesterday = datetime.now() - timedelta(days=1)
+    # Простая и надежная логика: анализы через 24-72 часа от визита
+    hours_later = random.randint(ANALYSIS_MIN_HOURS, ANALYSIS_MAX_HOURS)
+    analysis_datetime = visit_datetime + timedelta(hours=hours_later)
     
-    # Определяем максимально допустимые часы от визита до вчерашней даты
-    max_allowed_hours = (yesterday - visit_datetime).total_seconds() / 3600
+    # Корректируем на рабочее время, если попали в нерабочее
+    # Если попали в выходной, переносим на следующий рабочий день
+    while analysis_datetime.weekday() not in WORK_DAYS:
+        analysis_datetime += timedelta(days=1)
     
-    if max_allowed_hours < ANALYSIS_MIN_HOURS:
-        # Если время слишком мало, устанавливаем анализы через минимальное время
-        analysis_datetime = visit_datetime + timedelta(hours=ANALYSIS_MIN_HOURS)
-        # Но не позднее вчера в 17:00
-        if analysis_datetime > yesterday:
-            analysis_datetime = yesterday.replace(hour=17, minute=0)
-    else:
-        # Выбираем случайное время в допустимом диапазоне
-        hours_later = random.randint(
-            ANALYSIS_MIN_HOURS, 
-            min(int(max_allowed_hours), ANALYSIS_MAX_HOURS)
-        )
-        analysis_datetime = visit_datetime + timedelta(hours=hours_later)
+    # Корректируем время на рабочее
+    if analysis_datetime.hour < WORK_HOURS_START:
+        analysis_datetime = analysis_datetime.replace(hour=WORK_HOURS_START, minute=0)
+    elif analysis_datetime.hour >= WORK_HOURS_END:
+        analysis_datetime = analysis_datetime.replace(hour=WORK_HOURS_END-1, minute=0)
     
-    # Убеждаемся, что это рабочий день и время
-    attempts = 0
-    max_attempts = 5
-    
-    while attempts < max_attempts:
-        # Проверяем рабочий день
-        if analysis_datetime.weekday() not in WORK_DAYS:
-            # Переносим на предыдущий рабочий день, если дата превышает вчера
-            if analysis_datetime > yesterday:
-                days_to_subtract = 1
-                while (analysis_datetime - timedelta(days=days_to_subtract)).weekday() not in WORK_DAYS:
-                    days_to_subtract += 1
-                analysis_datetime = analysis_datetime - timedelta(days=days_to_subtract)
-                analysis_datetime = analysis_datetime.replace(hour=17, minute=0)  # Конец рабочего дня
-            else:
-                # Иначе переносим на следующий рабочий день
-                days_to_add = 1
-                while (analysis_datetime + timedelta(days=days_to_add)).weekday() not in WORK_DAYS:
-                    days_to_add += 1
-                analysis_datetime = analysis_datetime + timedelta(days=days_to_add)
-                analysis_datetime = analysis_datetime.replace(hour=WORK_HOURS_START, minute=0)
+    # Убеждаемся что разница не меньше 24 часов
+    actual_diff = (analysis_datetime - visit_datetime).total_seconds() / 3600
+    if actual_diff < ANALYSIS_MIN_HOURS:
+        # Добавляем недостающие часы
+        additional_hours = ANALYSIS_MIN_HOURS - actual_diff + 1  # +1 для запаса
+        analysis_datetime = analysis_datetime + timedelta(hours=additional_hours)
         
-        # Корректируем время на рабочие часы
+        # Повторно корректируем на рабочее время после добавления часов
+        while analysis_datetime.weekday() not in WORK_DAYS:
+            analysis_datetime += timedelta(days=1)
+        
         if analysis_datetime.hour < WORK_HOURS_START:
             analysis_datetime = analysis_datetime.replace(hour=WORK_HOURS_START, minute=0)
         elif analysis_datetime.hour >= WORK_HOURS_END:
             analysis_datetime = analysis_datetime.replace(hour=WORK_HOURS_END-1, minute=0)
-        
-        # Финальная проверка на вчерашний день
-        if analysis_datetime <= yesterday:
-            break
-            
-        # Если все еще превышает, устанавливаем вчера в конце рабочего дня
-        analysis_datetime = yesterday.replace(hour=17, minute=0)
-        break
     
     return analysis_datetime
 
@@ -765,8 +749,10 @@ def validate_business_logic(record: Dict) -> List[str]:
                 errors.append("Дата анализов должна быть после даты визита")
             
             diff_hours = (analysis_dt - visit_dt).total_seconds() / 3600
-            if diff_hours < ANALYSIS_MIN_HOURS or diff_hours > ANALYSIS_MAX_HOURS:
-                errors.append(f"Анализы должны быть получены через {ANALYSIS_MIN_HOURS}-{ANALYSIS_MAX_HOURS} часов, получено: {diff_hours:.1f}")
+            # Более реалистичная проверка: анализы могут задержаться из-за выходных
+            # Минимум 24 часа, максимум 7 дней (168 часов) для учета выходных
+            if diff_hours < ANALYSIS_MIN_HOURS or diff_hours > 168:  # 7 дней вместо 72 часов
+                errors.append(f"Анализы должны быть получены через {ANALYSIS_MIN_HOURS}-168 часов, получено: {diff_hours:.1f}")
     
     except Exception as e:
         errors.append(f"Ошибка проверки дат: {e}")

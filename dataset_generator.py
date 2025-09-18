@@ -214,11 +214,26 @@ class DatasetGenerator:
         # Выбираем клиента
         client = self.select_client()
         
-        # НОВАЯ ЛОГИКА: Сначала выбираем врача с учетом пола клиента
-        doctor = select_doctor_by_gender(client['gender'])
+        # ИСПРАВЛЕННАЯ ЛОГИКА: Сначала генерируем реалистичные симптомы, затем врача
+        # Генерируем 1-3 общих симптома
+        from data_dictionaries import SYMPTOMS_DICT
+        symptoms = random.sample(SYMPTOMS_DICT, random.randint(1, 3))
         
-        # Генерируем симптомы на основе врача (1-3 симптома)
-        symptoms = generate_symptoms_by_doctor(doctor, min_count=1, max_count=3)
+        # Выбираем врача на основе симптомов
+        doctor = select_doctor_by_symptoms(symptoms)
+        
+        # Если врач не подходит по полу клиента, корректируем
+        from data_dictionaries import DOCTORS_MALE, DOCTORS_FEMALE
+        if client['gender'] == 'M' and doctor not in DOCTORS_MALE:
+            # Если врач не принимает мужчин, находим подходящего
+            if doctor in ["гинеколог", "маммолог"]:
+                doctor = "уролог"  # Логичная замена для мужчин
+            elif doctor == "косметолог":
+                doctor = "дерматолог"
+        elif client['gender'] == 'F' and doctor not in DOCTORS_FEMALE:
+            # Если врач не принимает женщин, находим подходящую
+            if doctor in ["андролог", "сексолог"]:
+                doctor = "гинеколог"  # Логичная замена для женщин
         
         # Генерируем дату визита
         visit_datetime = generate_working_datetime()
