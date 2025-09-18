@@ -37,7 +37,8 @@ def generate_slavic_fio() -> Tuple[str, str]:
         name = random.choice(SLAVIC_NAMES_FEMALE)
         patronymic = random.choice(SLAVIC_PATRONYMICS_FEMALE)
         # Добавляем женские окончания к фамилиям при необходимости
-        if surname.endswith('ов') or surname.endswith('ин') or surname.endswith('ский') or surname.endswith('ев'):
+        if (surname.endswith('ов') or surname.endswith('ин') or surname.endswith('ский') or 
+            surname.endswith('ев') or surname.endswith('ук') or surname.endswith('юк')):
             if surname.endswith('ов'):
                 surname = surname[:-2] + 'ова'
             elif surname.endswith('ев'):  # Медведев -> Медведева
@@ -46,6 +47,10 @@ def generate_slavic_fio() -> Tuple[str, str]:
                 surname = surname[:-2] + 'ина'
             elif surname.endswith('ский'):
                 surname = surname[:-3] + 'ская'
+            elif surname.endswith('ук'):  # Ukrainian: Сидорчук -> Сидорчук (no change, Ukrainian surnames don't change)
+                pass  # Ukrainian surnames stay the same for both genders
+            elif surname.endswith('юк'):  # Ukrainian: keep the same
+                pass  # Ukrainian surnames stay the same for both genders
     
     full_name = f"{surname} {name} {patronymic}"
     return full_name, gender
