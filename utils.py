@@ -10,7 +10,7 @@ from data_dictionaries import (
     SLAVIC_SURNAMES, SLAVIC_NAMES_MALE, SLAVIC_NAMES_FEMALE,
     SLAVIC_PATRONYMICS_MALE, SLAVIC_PATRONYMICS_FEMALE,
     SYMPTOMS_DICT, DOCTORS_SPECIALIZATIONS, MEDICAL_ANALYSES,
-    SYMPTOM_DOCTOR_MAPPING, DOCTOR_ANALYSIS_MAPPING
+    DOCTOR_SYMPTOM_MAPPING, DOCTOR_ANALYSIS_MAPPING
 )
 from config import (
     WORK_HOURS_START, WORK_HOURS_END, WORK_DAYS, TIMEZONE,
@@ -123,10 +123,16 @@ def generate_passport_issue_date(birth_date: datetime, visit_date: datetime) -> 
         earliest_passport_date = max(earliest_passport_date, birth_date.replace(year=birth_date.year + 45))
         latest_date = visit_date
     
+    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Убеждаемся что дата выдачи всегда до даты визита
+    # Вычитаем минимум 30 дней от даты визита как максимальную дату выдачи
+    max_issue_date = visit_date - timedelta(days=30)
+    latest_date = min(latest_date, max_issue_date)
+    
     # Генерируем случайную дату в допустимом диапазоне
     days_diff = (latest_date - earliest_passport_date).days
     if days_diff <= 0:
-        return earliest_passport_date
+        # Если окно некорректно, устанавливаем дату за год до визита
+        return max(earliest_passport_date, visit_date - timedelta(days=365))
     
     random_days = random.randint(0, days_diff)
     return earliest_passport_date + timedelta(days=random_days)
@@ -241,9 +247,103 @@ def select_country_by_probability() -> str:
     return "ru"
 
 
+def select_doctor_by_gender(gender: str) -> str:
+    """
+    Выбор врача с учетом пола пациента (новая логика)
+    
+    Args:
+        gender: пол пациента ('M' или 'F')
+    
+    Returns:
+        специализация врача
+    """
+    from data_dictionaries import DOCTORS_MALE, DOCTORS_FEMALE
+    
+    if gender == 'M':
+        return random.choice(DOCTORS_MALE)
+    else:
+        return random.choice(DOCTORS_FEMALE)
+
+
+def generate_symptoms_by_doctor(doctor: str, min_count: int = 1, max_count: int = 3) -> List[str]:
+    """
+    Генерация симптомов на основе специализации врача (новая логика)
+    
+    Args:
+        doctor: специализация врача
+        min_count: минимальное количество симптомов
+        max_count: максимальное количество симптомов
+    
+    Returns:
+        список симптомов
+    """
+    from data_dictionaries import DOCTOR_SYMPTOM_MAPPING
+    
+    count = random.randint(min_count, max_count)
+    
+    # Получаем симптомы для данного врача
+    doctor_symptoms = DOCTOR_SYMPTOM_MAPPING.get(doctor, [])
+    
+    if len(doctor_symptoms) >= count:
+        # Выбираем случайные симптомы из списка врача
+        return random.sample(doctor_symptoms, count)
+    else:
+        # Если симптомов врача недостаточно, добавляем общие симптомы
+        selected = doctor_symptoms.copy()
+        
+        # Добавляем общие симптомы для достижения нужного количества
+        general_symptoms = ["головная боль", "слабость", "температура", "тошнота", "головокружение"]
+        additional_needed = count - len(selected)
+        
+        available_general = [s for s in general_symptoms if s not in selected]
+        if available_general:
+            additional = random.choices(available_general, k=min(additional_needed, len(available_general)))
+            selected.extend(additional)
+        
+        return selected
+
+
+def generate_analyses_by_doctor_new(doctor: str, min_count: int = 1, max_count: int = 2) -> List[str]:
+    """
+    Генерация анализов на основе специализации врача (новая логика)
+    
+    Args:
+        doctor: специализация врача
+        min_count: минимальное количество анализов
+        max_count: максимальное количество анализов
+    
+    Returns:
+        список анализов
+    """
+    from data_dictionaries import DOCTOR_ANALYSIS_MAPPING
+    
+    count = random.randint(min_count, max_count)
+    
+    # Получаем анализы для данного врача
+    doctor_analyses = DOCTOR_ANALYSIS_MAPPING.get(doctor, [])
+    
+    if len(doctor_analyses) >= count:
+        # Выбираем случайные анализы из списка врача
+        return random.sample(doctor_analyses, count)
+    else:
+        # Если анализов врача недостаточно, добавляем общие анализы
+        selected = doctor_analyses.copy()
+        
+        # Добавляем общие анализы для достижения нужного количества
+        general_analyses = ["общий анализ крови", "общий анализ мочи"]
+        additional_needed = count - len(selected)
+        
+        available_general = [a for a in general_analyses if a not in selected]
+        if available_general:
+            additional = random.choices(available_general, k=min(additional_needed, len(available_general)))
+            selected.extend(additional)
+        
+        return selected
+
+
 def generate_symptoms(min_count: int = 1, max_count: int = 10) -> List[str]:
     """
-    Генерация списка симптомов
+    Генерация списка симптомов (старая логика - оставлена для совместимости)
     
     Args:
         min_count: минимальное количество симптомов
@@ -271,7 +371,9 @@ def select_doctor_by_symptoms(symptoms: List[str]) -> str:
     # Подсчет совпадений симптомов с каждым врачом
     doctor_scores = {}
     
-    for doctor, doctor_symptoms in SYMPTOM_DOCTOR_MAPPING.items():
+    from data_dictionaries import DOCTOR_SYMPTOM_MAPPING
+    
+    for doctor, doctor_symptoms in DOCTOR_SYMPTOM_MAPPING.items():
         score = 0
         for symptom in symptoms:
             if any(doc_symptom in symptom for doc_symptom in doctor_symptoms):
@@ -371,48 +473,69 @@ def generate_working_datetime(start_date: datetime = None,
 
 def generate_analysis_datetime(visit_datetime: datetime) -> datetime:
     """
-    Генерация даты получения анализов (через 24-72 часа после визита)
+    Генерация даты получения анализов с учетом рабочих часов и ограничений
     
     Args:
-        visit_datetime: дата и время визита
+        visit_datetime: дата и время визита к врачу
     
     Returns:
         дата и время получения анализов
     """
-    # Случайное количество часов в диапазоне 24-72
-    hours_later = random.randint(ANALYSIS_MIN_HOURS, ANALYSIS_MAX_HOURS)
-    analysis_datetime = visit_datetime + timedelta(hours=hours_later)
+    # ИСПРАВЛЕНИЕ Issue #6: Дата анализов не позднее чем вчера от текущей даты
+    yesterday = datetime.now() - timedelta(days=1)
+    
+    # Определяем максимально допустимые часы от визита до вчерашней даты
+    max_allowed_hours = (yesterday - visit_datetime).total_seconds() / 3600
+    
+    if max_allowed_hours < ANALYSIS_MIN_HOURS:
+        # Если время слишком мало, устанавливаем анализы через минимальное время
+        analysis_datetime = visit_datetime + timedelta(hours=ANALYSIS_MIN_HOURS)
+        # Но не позднее вчера в 17:00
+        if analysis_datetime > yesterday:
+            analysis_datetime = yesterday.replace(hour=17, minute=0)
+    else:
+        # Выбираем случайное время в допустимом диапазоне
+        hours_later = random.randint(
+            ANALYSIS_MIN_HOURS, 
+            min(int(max_allowed_hours), ANALYSIS_MAX_HOURS)
+        )
+        analysis_datetime = visit_datetime + timedelta(hours=hours_later)
     
     # Убеждаемся, что это рабочий день и время
     attempts = 0
-    max_attempts = 10
+    max_attempts = 5
     
     while attempts < max_attempts:
         # Проверяем рабочий день
         if analysis_datetime.weekday() not in WORK_DAYS:
-            # Переносим на следующий рабочий день
-            days_to_add = 1
-            while (analysis_datetime + timedelta(days=days_to_add)).weekday() not in WORK_DAYS:
-                days_to_add += 1
-            analysis_datetime = analysis_datetime + timedelta(days=days_to_add)
+            # Переносим на предыдущий рабочий день, если дата превышает вчера
+            if analysis_datetime > yesterday:
+                days_to_subtract = 1
+                while (analysis_datetime - timedelta(days=days_to_subtract)).weekday() not in WORK_DAYS:
+                    days_to_subtract += 1
+                analysis_datetime = analysis_datetime - timedelta(days=days_to_subtract)
+                analysis_datetime = analysis_datetime.replace(hour=17, minute=0)  # Конец рабочего дня
+            else:
+                # Иначе переносим на следующий рабочий день
+                days_to_add = 1
+                while (analysis_datetime + timedelta(days=days_to_add)).weekday() not in WORK_DAYS:
+                    days_to_add += 1
+                analysis_datetime = analysis_datetime + timedelta(days=days_to_add)
+                analysis_datetime = analysis_datetime.replace(hour=WORK_HOURS_START, minute=0)
         
         # Корректируем время на рабочие часы
         if analysis_datetime.hour < WORK_HOURS_START:
             analysis_datetime = analysis_datetime.replace(hour=WORK_HOURS_START, minute=0)
         elif analysis_datetime.hour >= WORK_HOURS_END:
-            # Переносим на следующий рабочий день, начало рабочего времени
-            analysis_datetime = analysis_datetime.replace(hour=WORK_HOURS_START, minute=0)
-            analysis_datetime += timedelta(days=1)
+            analysis_datetime = analysis_datetime.replace(hour=WORK_HOURS_END-1, minute=0)
         
-        # Проверяем что итоговая дата не превышает лимит в 72 часа
-        hours_diff = (analysis_datetime - visit_datetime).total_seconds() / 3600
-        if hours_diff <= ANALYSIS_MAX_HOURS:
+        # Финальная проверка на вчерашний день
+        if analysis_datetime <= yesterday:
             break
             
-        # Если превышает лимит, выбираем более раннюю дату
-        hours_later = random.randint(ANALYSIS_MIN_HOURS, min(60, ANALYSIS_MAX_HOURS))
-        analysis_datetime = visit_datetime + timedelta(hours=hours_later)
-        attempts += 1
+        # Если все еще превышает, устанавливаем вчера в конце рабочего дня
+        analysis_datetime = yesterday.replace(hour=17, minute=0)
+        break
     
     return analysis_datetime
 

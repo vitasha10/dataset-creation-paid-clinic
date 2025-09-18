@@ -228,6 +228,7 @@ class UniquenessTracker:
     
     def __init__(self):
         self.passports: Set[str] = set()
+        self.fio_to_passport: Dict[str, str] = {}  # ФИО -> паспорт (один паспорт на ФИО)
         self.snils_by_client: Dict[Tuple[str, str], str] = {}  # (fio, passport) -> snils
         self.card_usage: Dict[str, int] = {}  # card_number -> usage_count
         
@@ -239,6 +240,18 @@ class UniquenessTracker:
         """Добавление паспорта в отслеживание"""
         if self.is_passport_unique(passport):
             self.passports.add(passport)
+            return True
+        return False
+    
+    def get_fio_passport(self, fio: str) -> Optional[str]:
+        """Получение паспорта по ФИО"""
+        return self.fio_to_passport.get(fio)
+    
+    def add_fio_passport(self, fio: str, passport: str) -> bool:
+        """Добавление связки ФИО-паспорт"""
+        if fio not in self.fio_to_passport:
+            self.fio_to_passport[fio] = passport
+            self.add_passport(passport)
             return True
         return False
     
@@ -271,7 +284,7 @@ class UniquenessTracker:
         """Получение статистики уникальности"""
         return {
             "unique_passports": len(self.passports),
-            "unique_clients": len(self.snils_by_client), 
+            "unique_clients": len(self.fio_to_passport), 
             "cards_in_use": len(self.card_usage),
             "total_card_usage": sum(self.card_usage.values())
         }

@@ -15,7 +15,7 @@ WORK_DAYS = [0, 1, 2, 3, 4]  # Понедельник-пятница (0=Monday)
 TIMEZONE = "+03:00"
 
 # Вероятности и ограничения
-CLIENT_REPEAT_PROBABILITY = 0.25  # 25% вероятность повторного визита
+CLIENT_REPEAT_PROBABILITY = 0.60  # 60% вероятность повторного визита (было 0.25)
 MAX_SYMPTOMS_PER_VISIT = 10
 MAX_ANALYSES_PER_VISIT = 5
 CARD_REUSE_LIMIT = 5
