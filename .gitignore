@@ -206,3 +206,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Generated test files - exclude from commits
+test_*.xlsx
+test_*_report.txt
+column_check*.xlsx
+column_check*_report.txt

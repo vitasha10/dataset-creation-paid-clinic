@@ -97,24 +97,48 @@ class DatasetGenerator:
         while attempts < max_attempts:
             fio, gender = generate_slavic_fio()
             country = select_country_by_probability()
-            passport = generate_passport_number(country)
+            
+            # Генерируем паспорт в зависимости от страны
+            if country == "ru":
+                # Для RU генерируем полную информацию о паспорте
+                visit_date = generate_working_datetime()  # Примерная дата для расчетов
+                from utils import generate_passport_data_ru
+                passport_data = generate_passport_data_ru(visit_date)
+                passport = passport_data["passport_data"]
+                passport_issue_date = passport_data["passport_issue_date"]
+                passport_department_code = passport_data["passport_department_code"]
+                birth_date = passport_data["birth_date"]
+            else:
+                # Для BY/KZ используем простую генерацию
+                passport = generate_passport_number(country)
+                passport_issue_date = None
+                passport_department_code = None
+                birth_date = None
             
             # Проверяем уникальность паспорта
             if self.uniqueness_tracker.add_passport(passport):
-                snils = generate_snils_number()
+                # СНИЛС только для граждан РФ
+                if country == "ru":
+                    snils = generate_snils_number()
+                else:
+                    snils = None  # Для BY/KZ граждан СНИЛС не требуется
                 
                 client = {
                     'fio': fio,
                     'gender': gender,
                     'passport': passport,
                     'country': country,
-                    'snils': snils
+                    'snils': snils,
+                    'passport_issue_date': passport_issue_date,
+                    'passport_department_code': passport_department_code,
+                    'birth_date': birth_date
                 }
                 
-                # Добавляем СНИЛС в трекер
-                self.uniqueness_tracker.add_client_snils(fio, passport, snils)
+                # Добавляем СНИЛС в трекер только для РФ
+                if snils:
+                    self.uniqueness_tracker.add_client_snils(fio, passport, snils)
                 
-                self.logger.debug(f"Создан новый клиент: {fio}")
+                self.logger.debug(f"Создан новый клиент: {fio} ({country})")
                 return client
             
             attempts += 1
@@ -197,7 +221,8 @@ class DatasetGenerator:
         record = {
             'FIO': client['fio'],
             'passport_data': client['passport'],
-            'SNILS': client['snils'],
+            'passport_country': client['country'],  # Добавляем страну паспорта для валидации
+            'SNILS': client['snils'] if client['snils'] else '',  # Пустое для non-RU
             'symptoms': format_symptoms_string(symptoms),
             'doctor_choice': doctor,
             'visit_date': format_datetime_iso(visit_datetime),
@@ -206,6 +231,11 @@ class DatasetGenerator:
             'analysis_cost': format_cost_string(cost),
             'payment_card': card_number
         }
+        
+        # Добавляем дополнительные поля для RU паспортов
+        if client['country'] == 'ru':
+            record['passport_issue_date'] = client['passport_issue_date']
+            record['passport_department_code'] = client['passport_department_code']
         
         return record
     
@@ -251,15 +281,8 @@ class DatasetGenerator:
                     
                 except Exception as e:
                     self.logger.error(f"Ошибка при генерации записи {len(dataset) + i + 1}: {e}")
-                    # Пробуем еще раз
-                    try:
-                        record = self.generate_visit_record()
-                        batch_records.append(record)
-                    except Exception as e2:
-                        self.logger.error(f"Повторная ошибка при генерации записи: {e2}")
-                        # Создаем пустую запись как fallback
-                        record = self._create_fallback_record()
-                        batch_records.append(record)
+                    # Пропускаем неудачную запись
+                    continue
             
             dataset.extend(batch_records)
             
@@ -282,26 +305,6 @@ class DatasetGenerator:
         
         return dataset
     
-    def _create_fallback_record(self) -> Dict:
-        """
-        Создание записи-заглушки в случае критических ошибок
-        
-        Returns:
-            минимально валидная запись
-        """
-        return {
-            'FIO': 'Иванов Иван Иванович',
-            'passport_data': '1234 123456',
-            'SNILS': '123-456-789 12',
-            'symptoms': 'общая слабость',
-            'doctor_choice': 'терапевт',
-            'visit_date': '2024-01-15T10:00+03:00',
-            'analyses': 'общий анализ крови',
-            'analysis_date': '2024-01-16T15:00+03:00',
-            'analysis_cost': '800 руб.',
-            'payment_card': '1234 5678 9012 3456'
-        }
-    
     def save_to_excel(self, dataset: List[Dict], filename: str = OUTPUT_FILE):
         """
         Сохранение датасета в Excel файл
@@ -319,6 +322,9 @@ class DatasetGenerator:
             column_mapping = {
                 'FIO': 'ФИО',
                 'passport_data': 'Паспортные данные',
+                'passport_country': 'Страна паспорта',
+                'passport_issue_date': 'Дата выдачи паспорта',
+                'passport_department_code': 'Код подразделения',
                 'SNILS': 'СНИЛС',
                 'symptoms': 'Симптомы',
                 'doctor_choice': 'Выбор врача',
@@ -329,11 +335,15 @@ class DatasetGenerator:
                 'payment_card': 'Карта оплаты'
             }
             
-            df = df.rename(columns=column_mapping)
+            # Удаляем колонки, которые не должны быть в итоговом файле согласно требованиям
+            columns_to_drop = ['passport_country', 'passport_issue_date', 'passport_department_code']
+            df_final = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
+            
+            df_final = df_final.rename(columns=column_mapping)
             
             # Сохраняем в Excel с автоширинами столбцов
             with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-                df.to_excel(writer, sheet_name='Датасет поликлиники', index=False)
+                df_final.to_excel(writer, sheet_name='Датасет поликлиники', index=False)
                 
                 # Автоширина столбцов
                 worksheet = writer.sheets['Датасет поликлиники']
