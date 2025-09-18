@@ -65,7 +65,7 @@ def select_region_by_weight():
         if rand <= cumulative:
             return region_code
     
-    return 77  # fallback на Москву
+    return 77  # Москва по умолчанию
 
 def generate_birth_date(visit_date: datetime) -> datetime:
     """
@@ -238,7 +238,7 @@ def select_country_by_probability() -> str:
         if rand <= cumulative:
             return country
     
-    return "ru"  # fallback
+    return "ru"
 
 
 def generate_symptoms(min_count: int = 1, max_count: int = 10) -> List[str]:

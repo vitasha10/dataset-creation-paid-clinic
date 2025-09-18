@@ -281,15 +281,8 @@ class DatasetGenerator:
                     
                 except Exception as e:
                     self.logger.error(f"Ошибка при генерации записи {len(dataset) + i + 1}: {e}")
-                    # Пробуем еще раз
-                    try:
-                        record = self.generate_visit_record()
-                        batch_records.append(record)
-                    except Exception as e2:
-                        self.logger.error(f"Повторная ошибка при генерации записи: {e2}")
-                        # Создаем пустую запись как fallback
-                        record = self._create_fallback_record()
-                        batch_records.append(record)
+                    # Пропускаем неудачную запись
+                    continue
             
             dataset.extend(batch_records)
             
@@ -311,26 +304,6 @@ class DatasetGenerator:
         self.logger.info(f"Статистика: {self.stats}")
         
         return dataset
-    
-    def _create_fallback_record(self) -> Dict:
-        """
-        Создание записи-заглушки в случае критических ошибок
-        
-        Returns:
-            минимально валидная запись
-        """
-        return {
-            'FIO': 'Иванов Иван Иванович',
-            'passport_data': '1234 123456',
-            'SNILS': '123-456-789 12',
-            'symptoms': 'общая слабость',
-            'doctor_choice': 'терапевт',
-            'visit_date': '2024-01-15T10:00+03:00',
-            'analyses': 'общий анализ крови',
-            'analysis_date': '2024-01-16T15:00+03:00',
-            'analysis_cost': '800 руб.',
-            'payment_card': '1234 5678 9012 3456'
-        }
     
     def save_to_excel(self, dataset: List[Dict], filename: str = OUTPUT_FILE):
         """
