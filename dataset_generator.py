@@ -1,0 +1,489 @@
+"""
+Основной модуль генерации датасета для платной поликлиники
+"""
+
+import random
+import logging
+import argparse
+from datetime import datetime, timedelta
+from typing import List, Dict, Optional
+import pandas as pd
+from pathlib import Path
+
+from config import *
+from data_dictionaries import *
+from validators import UniquenessTracker, DataValidator
+from utils import (
+    generate_slavic_fio, generate_passport_number, generate_snils_number,
+    select_country_by_probability, generate_symptoms, select_doctor_by_symptoms,
+    generate_analyses_by_doctor, generate_working_datetime, generate_analysis_datetime,
+    format_datetime_iso, generate_bank_card, calculate_analysis_cost,
+    format_symptoms_string, format_analyses_string, format_cost_string,
+    validate_business_logic, generate_batch_clients
+)
+import sys
+
+def configure_stdio_utf8():
+    """Настройка stdout/stderr на UTF-8, чтобы консольный лог не падал на Windows."""
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        # В крайнем случае просто продолжаем: лог в файл все равно будет в UTF-8
+        pass
+
+def setup_logging():
+    """Настройка логирования с устойчивой к Unicode консолью и UTF-8 файлом лога."""
+    handlers = []
+
+    # Лог в файл — всегда UTF-8
+    handlers.append(logging.FileHandler("dataset_generation.log", encoding="utf-8"))
+
+    # Консоль: после configure_stdio_utf8 стандартные потоки уже UTF-8
+    try:
+        handlers.append(logging.StreamHandler())
+    except Exception:
+        # Если консоль недоступна, просто пропустим
+        pass
+
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL),
+        format=LOG_FORMAT,
+        handlers=handlers,
+        force=True,  # сбросить любые ранее добавленные хэндлеры, которые могли быть не-UTF-8
+    )
+
+
+class DatasetGenerator:
+    """Генератор датасета платной поликлиники"""
+    
+    def __init__(self, seed: int = RANDOM_SEED):
+        """
+        Инициализация генератора
+        
+        Args:
+            seed: начальное значение для генератора случайных чисел
+        """
+        random.seed(seed)
+        self.seed = seed
+        self.repeat_probability = CLIENT_REPEAT_PROBABILITY
+        self.uniqueness_tracker = UniquenessTracker()
+        self.validator = DataValidator()
+        self.clients_pool = []  # Пул существующих клиентов для повторных визитов
+        self.logger = logging.getLogger(__name__)
+        
+        # Статистика генерации
+        self.stats = {
+            'total_records': 0,
+            'new_clients': 0,
+            'repeat_visits': 0,
+            'validation_errors': 0,
+            'unique_cards': 0,
+            'generation_time': 0
+        }
+    
+    def create_client(self) -> Dict:
+        """
+        Создание нового клиента
+        
+        Returns:
+            словарь с данными клиента
+        """
+        attempts = 0
+        max_attempts = 100
+        
+        while attempts < max_attempts:
+            fio, gender = generate_slavic_fio()
+            country = select_country_by_probability()
+            passport = generate_passport_number(country)
+            
+            # Проверяем уникальность паспорта
+            if self.uniqueness_tracker.add_passport(passport):
+                snils = generate_snils_number()
+                
+                client = {
+                    'fio': fio,
+                    'gender': gender,
+                    'passport': passport,
+                    'country': country,
+                    'snils': snils
+                }
+                
+                # Добавляем СНИЛС в трекер
+                self.uniqueness_tracker.add_client_snils(fio, passport, snils)
+                
+                self.logger.debug(f"Создан новый клиент: {fio}")
+                return client
+            
+            attempts += 1
+        
+        raise RuntimeError("Не удалось создать уникального клиента за максимальное количество попыток")
+    
+    def select_client(self) -> Dict:
+        """
+        Выбор клиента (новый или существующий для повторного визита)
+        
+        Returns:
+            словарь с данными клиента
+        """
+        # Определяем, создавать ли нового клиента или использовать существующего
+        if (not self.clients_pool or 
+            random.random() > self.repeat_probability or 
+            len(self.clients_pool) < 100):  # Минимум 100 клиентов в пуле
+            
+            # Создаем нового клиента
+            client = self.create_client()
+            self.clients_pool.append(client)
+            self.stats['new_clients'] += 1
+            return client
+        else:
+            # Выбираем существующего клиента для повторного визита
+            client = random.choice(self.clients_pool)
+            self.stats['repeat_visits'] += 1
+            self.logger.debug(f"Повторный визит клиента: {client['fio']}")
+            return client
+    
+    def generate_visit_record(self) -> Dict:
+        """
+        Генерация одной записи визита
+        
+        Returns:
+            словарь с данными записи
+        """
+        # Выбираем клиента
+        client = self.select_client()
+        
+        # Генерируем симптомы
+        symptoms = generate_symptoms(min_count=1, max_count=MAX_SYMPTOMS_PER_VISIT)
+        
+        # Выбираем врача на основе симптомов
+        doctor = select_doctor_by_symptoms(symptoms)
+        
+        # Генерируем дату визита
+        visit_datetime = generate_working_datetime()
+        
+        # Генерируем анализы на основе врача и симптомов
+        analyses = generate_analyses_by_doctor(
+            doctor, symptoms, 
+            min_count=1, max_count=MAX_ANALYSES_PER_VISIT
+        )
+        
+        # Генерируем дату получения анализов
+        analysis_datetime = generate_analysis_datetime(visit_datetime)
+        
+        # Рассчитываем стоимость анализов
+        cost = calculate_analysis_cost(analyses)
+        
+        # Генерируем банковскую карту
+        attempts = 0
+        max_attempts = 50
+        
+        while attempts < max_attempts:
+            card_number, bank, payment_system = generate_bank_card()
+            
+            if self.uniqueness_tracker.can_use_card(card_number, CARD_REUSE_LIMIT):
+                self.uniqueness_tracker.use_card(card_number)
+                break
+            
+            attempts += 1
+        else:
+            # Если не удалось найти свободную карту, создаем новую принудительно
+            card_number, bank, payment_system = generate_bank_card()
+            self.uniqueness_tracker.use_card(card_number)
+        
+        # Формируем итоговую запись
+        record = {
+            'FIO': client['fio'],
+            'passport_data': client['passport'],
+            'SNILS': client['snils'],
+            'symptoms': format_symptoms_string(symptoms),
+            'doctor_choice': doctor,
+            'visit_date': format_datetime_iso(visit_datetime),
+            'analyses': format_analyses_string(analyses),
+            'analysis_date': format_datetime_iso(analysis_datetime),
+            'analysis_cost': format_cost_string(cost),
+            'payment_card': card_number
+        }
+        
+        return record
+    
+    def generate_dataset(self, size: int = DATASET_SIZE) -> List[Dict]:
+        """
+        Генерация полного датасета
+        
+        Args:
+            size: количество записей в датасете
+        
+        Returns:
+            список записей датасета
+        """
+        self.logger.info(f"Начало генерации датасета размером {size} записей")
+        start_time = datetime.now()
+        
+        dataset = []
+        batch_size = min(BATCH_SIZE, size)
+        
+        for batch_start in range(0, size, batch_size):
+            batch_end = min(batch_start + batch_size, size)
+            batch_size_actual = batch_end - batch_start
+            
+            self.logger.info(f"Генерация пакета {batch_start + 1}-{batch_end} из {size}")
+            
+            batch_records = []
+            for i in range(batch_size_actual):
+                try:
+                    record = self.generate_visit_record()
+                    
+                    # Валидация записи
+                    is_valid, errors = self.validator.validate_record(record)
+                    if not is_valid:
+                        self.logger.warning(f"Ошибки валидации в записи {len(dataset) + i + 1}: {errors}")
+                        self.stats['validation_errors'] += len(errors)
+                    
+                    # Проверка бизнес-логики
+                    business_errors = validate_business_logic(record)
+                    if business_errors:
+                        self.logger.warning(f"Ошибки бизнес-логики в записи {len(dataset) + i + 1}: {business_errors}")
+                    
+                    batch_records.append(record)
+                    
+                except Exception as e:
+                    self.logger.error(f"Ошибка при генерации записи {len(dataset) + i + 1}: {e}")
+                    # Пробуем еще раз
+                    try:
+                        record = self.generate_visit_record()
+                        batch_records.append(record)
+                    except Exception as e2:
+                        self.logger.error(f"Повторная ошибка при генерации записи: {e2}")
+                        # Создаем пустую запись как fallback
+                        record = self._create_fallback_record()
+                        batch_records.append(record)
+            
+            dataset.extend(batch_records)
+            
+            # Логируем прогресс
+            progress = len(dataset) / size * 100
+            self.logger.info(f"Прогресс: {progress:.1f}% ({len(dataset)}/{size})")
+        
+        end_time = datetime.now()
+        generation_time = (end_time - start_time).total_seconds()
+        
+        # Обновляем статистику
+        self.stats.update({
+            'total_records': len(dataset),
+            'generation_time': generation_time,
+            'unique_cards': len(self.uniqueness_tracker.card_usage)
+        })
+        
+        self.logger.info(f"Генерация завершена за {generation_time:.2f} секунд")
+        self.logger.info(f"Статистика: {self.stats}")
+        
+        return dataset
+    
+    def _create_fallback_record(self) -> Dict:
+        """
+        Создание записи-заглушки в случае критических ошибок
+        
+        Returns:
+            минимально валидная запись
+        """
+        return {
+            'FIO': 'Иванов Иван Иванович',
+            'passport_data': '1234 123456',
+            'SNILS': '123-456-789 12',
+            'symptoms': 'общая слабость',
+            'doctor_choice': 'терапевт',
+            'visit_date': '2024-01-15T10:00+03:00',
+            'analyses': 'общий анализ крови',
+            'analysis_date': '2024-01-16T15:00+03:00',
+            'analysis_cost': '800 руб.',
+            'payment_card': '1234 5678 9012 3456'
+        }
+    
+    def save_to_excel(self, dataset: List[Dict], filename: str = OUTPUT_FILE):
+        """
+        Сохранение датасета в Excel файл
+        
+        Args:
+            dataset: список записей датасета
+            filename: имя выходного файла
+        """
+        self.logger.info(f"Сохранение датасета в файл {filename}")
+        
+        try:
+            df = pd.DataFrame(dataset)
+            
+            # Переименовываем колонки для Excel
+            column_mapping = {
+                'FIO': 'ФИО',
+                'passport_data': 'Паспортные данные',
+                'SNILS': 'СНИЛС',
+                'symptoms': 'Симптомы',
+                'doctor_choice': 'Выбор врача',
+                'visit_date': 'Дата посещения врача',
+                'analyses': 'Анализы',
+                'analysis_date': 'Дата получения анализов',
+                'analysis_cost': 'Стоимость анализов',
+                'payment_card': 'Карта оплаты'
+            }
+            
+            df = df.rename(columns=column_mapping)
+            
+            # Сохраняем в Excel с автоширинами столбцов
+            with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name='Датасет поликлиники', index=False)
+                
+                # Автоширина столбцов
+                worksheet = writer.sheets['Датасет поликлиники']
+                for column in worksheet.columns:
+                    max_length = 0
+                    column_letter = column[0].column_letter
+                    
+                    for cell in column:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except:
+                            pass
+                    
+                    adjusted_width = min(max_length + 2, 50)  # Максимум 50 символов
+                    worksheet.column_dimensions[column_letter].width = adjusted_width
+            
+            self.logger.info(f"Датасет успешно сохранен в {filename}")
+            
+        except Exception as e:
+            self.logger.error(f"Ошибка при сохранении в Excel: {e}")
+            # Fallback: сохраняем в CSV
+            csv_filename = filename.replace('.xlsx', '.csv')
+            self.logger.info(f"Пробуем сохранить в CSV: {csv_filename}")
+            df.to_csv(csv_filename, index=False, encoding='utf-8-sig')
+    
+    def generate_report(self) -> str:
+        """
+        Генерация отчета о созданном датасете
+        
+        Returns:
+            текст отчета
+        """
+        uniqueness_stats = self.uniqueness_tracker.get_stats()
+        
+        report = f"""
+ОТЧЕТ О ГЕНЕРАЦИИ ДАТАСЕТА ПЛАТНОЙ ПОЛИКЛИНИКИ
+==============================================
+
+Параметры генерации:
+- Размер датасета: {self.stats['total_records']} записей
+- Seed: {self.seed}
+- Время генерации: {self.stats['generation_time']:.2f} секунд
+
+Статистика клиентов:
+- Новые клиенты: {self.stats['new_clients']}
+- Повторные визиты: {self.stats['repeat_visits']}
+- Уникальные паспорта: {uniqueness_stats['unique_passports']}
+- Уникальные клиенты: {uniqueness_stats['unique_clients']}
+
+Статистика платежей:
+- Уникальные карты: {uniqueness_stats['cards_in_use']}
+- Общее использование карт: {uniqueness_stats['total_card_usage']}
+- Средняя кратность использования: {uniqueness_stats['total_card_usage'] / max(1, uniqueness_stats['cards_in_use']):.2f}
+
+Качество данных:
+- Ошибки валидации: {self.stats['validation_errors']}
+- Процент корректных записей: {((self.stats['total_records'] - self.stats['validation_errors']) / self.stats['total_records'] * 100):.2f}%
+
+Производительность:
+- Записей в секунду: {self.stats['total_records'] / max(1, self.stats['generation_time']):.2f}
+- Время на запись: {self.stats['generation_time'] / max(1, self.stats['total_records']) * 1000:.2f} мс
+
+Структура данных:
+1. ФИО - славянские имена
+2. Паспортные данные - RU/BY/KZ форматы
+3. СНИЛС - с корректной контрольной суммой
+4. Симптомы - 1-{MAX_SYMPTOMS_PER_VISIT} из {len(SYMPTOMS_DICT)} возможных
+5. Выбор врача - {len(DOCTORS_SPECIALIZATIONS)} специализаций
+6. Дата визита - рабочие дни {WORK_HOURS_START}:00-{WORK_HOURS_END}:00
+7. Анализы - 1-{MAX_ANALYSES_PER_VISIT} из {len(MEDICAL_ANALYSES)} возможных
+8. Дата анализов - через {ANALYSIS_MIN_HOURS}-{ANALYSIS_MAX_HOURS} часов
+9. Стоимость - в рублях, зависит от анализов
+10. Карта оплаты - с алгоритмом Луна, макс. {CARD_REUSE_LIMIT} использований
+
+Созданные файлы:
+- dataset_generation.log - лог генерации
+- {OUTPUT_FILE} - основной датасет
+"""
+        
+        return report
+    
+    def get_statistics(self) -> Dict:
+        """Получение статистики генерации"""
+        stats = self.stats.copy()
+        stats.update(self.uniqueness_tracker.get_stats())
+        return stats
+
+
+def main():
+    """Основная функция запуска генератора"""
+    configure_stdio_utf8()
+    parser = argparse.ArgumentParser(
+        description='Генератор датасета для платной поликлиники'
+    )
+    parser.add_argument(
+        '--size', type=int, default=DATASET_SIZE,
+        help=f'Размер датасета (по умолчанию: {DATASET_SIZE})'
+    )
+    parser.add_argument(
+        '--seed', type=int, default=RANDOM_SEED,
+        help=f'Seed для генератора случайных чисел (по умолчанию: {RANDOM_SEED})'
+    )
+    parser.add_argument(
+        '--output', type=str, default=OUTPUT_FILE,
+        help=f'Имя выходного файла (по умолчанию: {OUTPUT_FILE})'
+    )
+    parser.add_argument(
+        '--repeat-probability', type=float, default=CLIENT_REPEAT_PROBABILITY,
+        help=f'Вероятность повторного визита (по умолчанию: {CLIENT_REPEAT_PROBABILITY})'
+    )
+    
+    args = parser.parse_args()
+    
+    # Настройка логирования
+    setup_logging()
+    logger = logging.getLogger(__name__)
+    
+    logger.info("Запуск генератора датасета платной поликлиники")
+    logger.info(f"Параметры: размер={args.size}, seed={args.seed}, выход={args.output}, повтор={args.repeat_probability}")
+    
+    try:
+        # Создаем генератор с кастомными параметрами
+        generator = DatasetGenerator(seed=args.seed)
+        # Обновляем параметры генератора
+        generator.repeat_probability = args.repeat_probability
+        
+        # Генерируем датасет
+        dataset = generator.generate_dataset(size=args.size)
+        
+        # Сохраняем в Excel
+        generator.save_to_excel(dataset, args.output)
+        
+        # Генерируем отчет
+        report = generator.generate_report()
+        
+        # Сохраняем отчет
+        report_filename = args.output.replace('.xlsx', '_report.txt')
+        with open(report_filename, 'w', encoding='utf-8') as f:
+            f.write(report)
+        
+        logger.info(f"Отчет сохранен в {report_filename}")
+        print(report)
+        
+        logger.info("Генерация датасета завершена успешно")
+        
+    except Exception as e:
+        logger.error(f"Критическая ошибка при генерации датасета: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    main()
