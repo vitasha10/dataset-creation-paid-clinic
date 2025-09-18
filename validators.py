@@ -3,12 +3,79 @@
 """
 
 import re
-from typing import Dict, Set, Tuple, Optional
+from typing import Dict, Set, Tuple, Optional, List
 
+
+def validate_passport_ru(passport_data: str, passport_issue_date: str = None, 
+                        passport_department_code: str = None, visit_date: str = None, 
+                        birth_date = None) -> Tuple[bool, List[str]]:
+    """
+    Расширенная проверка российского паспорта
+    
+    Args:
+        passport_data: серия и номер паспорта
+        passport_issue_date: дата выдачи
+        passport_department_code: код подразделения
+        visit_date: дата визита
+        birth_date: дата рождения
+    
+    Returns:
+        (is_valid, errors_list)
+    """
+    errors = []
+    
+    # Проверка формата серии и номера
+    if not re.match(r"^\d{4} \d{6}$", passport_data):
+        errors.append("Неверный формат российского паспорта (ожидается SSSS NNNNNN)")
+        return False, errors
+    
+    series = passport_data[:4]
+    number = passport_data[5:]
+    
+    # Проверка кода подразделения
+    if passport_department_code:
+        if not re.match(r"^\d{3}-\d{3}$", passport_department_code):
+            errors.append("Неверный формат кода подразделения (ожидается XXX-YYY)")
+        else:
+            # Проверка соответствия региона
+            series_region = int(series[:2])
+            dept_region = int(passport_department_code[:3])  # Первые 3 цифры кода подразделения
+            if series_region != dept_region:
+                errors.append("Регион в серии паспорта не соответствует коду подразделения")
+    
+    # Проверка даты выдачи
+    if passport_issue_date:
+        try:
+            from datetime import datetime
+            issue_dt = datetime.fromisoformat(passport_issue_date)
+            
+            # Не раньше введения нового образца
+            if issue_dt < datetime(1997, 10, 1):
+                errors.append("Дата выдачи паспорта раньше введения нового образца (1997-10-01)")
+            
+            # Проверка соответствия года в серии
+            series_year = int(series[2:4])
+            expected_year = issue_dt.year % 100
+            if series_year != expected_year:
+                errors.append(f"Год в серии паспорта ({series_year}) не соответствует году выдачи ({expected_year})")
+            
+            # Проверка даты визита
+            if visit_date:
+                try:
+                    visit_dt = datetime.fromisoformat(visit_date.replace('+03:00', ''))
+                    if issue_dt > visit_dt:
+                        errors.append("Дата выдачи паспорта позже даты визита")
+                except:
+                    pass
+                    
+        except ValueError:
+            errors.append("Неверный формат даты выдачи паспорта")
+    
+    return len(errors) == 0, errors
 
 def validate_passport_format(passport: str, country: str) -> bool:
     """
-    Проверка формата паспорта в зависимости от страны
+    Проверка формата паспорта в зависимости от страны (базовая проверка)
     
     Args:
         passport: номер паспорта
@@ -233,16 +300,32 @@ class DataValidator:
         if not fio or len(fio.split()) != 3:
             errors.append("ФИО должно содержать фамилию, имя и отчество")
         
-        # Проверка паспорта
+        # Проверка паспорта в зависимости от страны
         passport = record.get("passport_data", "")
         country = record.get("passport_country", "ru")
-        if not validate_passport_format(passport, country):
-            errors.append(f"Неверный формат паспорта для страны {country}")
         
-        # Проверка СНИЛС
+        if country == "ru":
+            # Расширенная проверка для российских паспортов
+            passport_issue_date = record.get("passport_issue_date")
+            passport_department_code = record.get("passport_department_code")
+            visit_date = record.get("visit_date")
+            
+            is_valid_passport, passport_errors = validate_passport_ru(
+                passport, passport_issue_date, passport_department_code, visit_date
+            )
+            if not is_valid_passport:
+                errors.extend(passport_errors)
+        else:
+            # Базовая проверка для BY/KZ
+            if not validate_passport_format(passport, country):
+                errors.append(f"Неверный формат паспорта для страны {country}")
+        
+        # Проверка СНИЛС (только для граждан РФ)
         snils = record.get("SNILS", "")
-        if not validate_snils_format(snils):
-            errors.append("Неверный формат или контрольная сумма СНИЛС")
+        if country == "ru":
+            if snils and not validate_snils_format(snils):
+                errors.append("Неверный формат или контрольная сумма СНИЛС")
+        # Для BY/KZ граждан СНИЛС не требуется (может быть пустым)
         
         # Проверка даты визита
         visit_date = record.get("visit_date", "")

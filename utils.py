@@ -49,20 +49,135 @@ def generate_slavic_fio() -> Tuple[str, str]:
     return full_name, gender
 
 
-def generate_passport_number(country: str = "ru") -> str:
+def select_region_by_weight():
+    """
+    Выбор региона РФ согласно весовому распределению
+    
+    Returns:
+        код региона
+    """
+    from config import RU_REGIONS
+    rand = random.random()
+    cumulative = 0
+    
+    for region_code, data in RU_REGIONS.items():
+        cumulative += data["weight"]
+        if rand <= cumulative:
+            return region_code
+    
+    return 77  # fallback на Москву
+
+def generate_birth_date(visit_date: datetime) -> datetime:
+    """
+    Генерация даты рождения с учетом возрастного распределения клиентов
+    
+    Args:
+        visit_date: дата визита
+    
+    Returns:
+        дата рождения
+    """
+    # Возрастное распределение: 18-80 лет с пиком 25-45
+    age = random.choices(
+        range(18, 81),
+        weights=[1 if i < 25 else 3 if i <= 45 else 2 if i <= 65 else 1 for i in range(18, 81)]
+    )[0]
+    
+    birth_year = visit_date.year - age
+    birth_month = random.randint(1, 12)
+    birth_day = random.randint(1, 28)  # Избегаем проблем с 29-31 числами
+    
+    return datetime(birth_year, birth_month, birth_day)
+
+def generate_passport_issue_date(birth_date: datetime, visit_date: datetime) -> datetime:
+    """
+    Генерация даты выдачи паспорта с учетом возрастных окон
+    
+    Args:
+        birth_date: дата рождения
+        visit_date: дата визита
+    
+    Returns:
+        дата выдачи паспорта
+    """
+    # Рассчитываем возраст на момент визита
+    age_at_visit = visit_date.year - birth_date.year
+    if visit_date.replace(year=birth_date.year) < birth_date:
+        age_at_visit -= 1
+    
+    # Определяем окно выдачи паспорта
+    earliest_passport_date = max(
+        birth_date.replace(year=birth_date.year + 14),  # Первый паспорт в 14 лет
+        datetime(1997, 10, 1)  # Не раньше введения нового образца
+    )
+    
+    if age_at_visit < 20:
+        # До 20 лет - первый паспорт
+        latest_date = min(visit_date, birth_date.replace(year=birth_date.year + 20))
+    elif age_at_visit < 45:
+        # 20-45 лет - замена в 20
+        earliest_passport_date = max(earliest_passport_date, birth_date.replace(year=birth_date.year + 20))
+        latest_date = min(visit_date, birth_date.replace(year=birth_date.year + 45))
+    else:
+        # После 45 лет - замена в 45
+        earliest_passport_date = max(earliest_passport_date, birth_date.replace(year=birth_date.year + 45))
+        latest_date = visit_date
+    
+    # Генерируем случайную дату в допустимом диапазоне
+    days_diff = (latest_date - earliest_passport_date).days
+    if days_diff <= 0:
+        return earliest_passport_date
+    
+    random_days = random.randint(0, days_diff)
+    return earliest_passport_date + timedelta(days=random_days)
+
+def generate_passport_data_ru(visit_date: datetime) -> Dict:
+    """
+    Генерация полных данных российского паспорта
+    
+    Args:
+        visit_date: дата визита
+    
+    Returns:
+        словарь с данными паспорта
+    """
+    # Генерируем базовые данные
+    birth_date = generate_birth_date(visit_date)
+    issue_date = generate_passport_issue_date(birth_date, visit_date)
+    region_code = select_region_by_weight()
+    
+    # Формируем серию: RRYY (регион + год выдачи)
+    series = f"{region_code:02d}{issue_date.year % 100:02d}"
+    
+    # Генерируем номер (6 цифр)
+    number = f"{random.randint(1, 999999):06d}"
+    
+    # Код подразделения: RRR-UUU
+    department_code = f"{region_code:03d}-{random.randint(1, 999):03d}"
+    
+    return {
+        "passport_data": f"{series} {number}",
+        "passport_issue_date": issue_date.strftime("%Y-%m-%d"),
+        "passport_department_code": department_code,
+        "birth_date": birth_date
+    }
+
+def generate_passport_number(country: str = "ru", visit_date: datetime = None) -> str:
     """
     Генерация номера паспорта для указанной страны
     
     Args:
         country: код страны (ru, by, kz)
+        visit_date: дата визита (для RU паспортов)
     
     Returns:
         номер паспорта в соответствующем формате
     """
     if country == "ru":
-        series = random.randint(1000, 9999)
-        number = random.randint(100000, 999999)
-        return f"{series} {number}"
+        if visit_date is None:
+            visit_date = datetime.now()
+        passport_data = generate_passport_data_ru(visit_date)
+        return passport_data["passport_data"]
     
     elif country == "by":
         prefix = random.choice(PASSPORT_FORMATS["by"]["prefixes"])
@@ -389,7 +504,7 @@ def generate_bank_card() -> Tuple[str, str, str]:
 
 def calculate_analysis_cost(analyses: List[str]) -> int:
     """
-    Расчет стоимости анализов
+    Расчет стоимости анализов (фиксированные цены)
     
     Args:
         analyses: список анализов
@@ -403,30 +518,30 @@ def calculate_analysis_cost(analyses: List[str]) -> int:
     
     for analysis in analyses:
         if analysis in ANALYSIS_COSTS:
+            # Используем фиксированную стоимость
             base_cost = ANALYSIS_COSTS[analysis]
         else:
-            # Определяем тип анализа и используем диапазон
+            # Определяем тип анализа и используем среднюю стоимость из диапазона
             analysis_lower = analysis.lower()
             if any(keyword in analysis_lower for keyword in ['кровь', 'крови']):
-                base_cost = random.randint(*COST_RANGES['кровь'])
+                base_cost = sum(COST_RANGES['кровь']) // 2  # Средняя цена
             elif any(keyword in analysis_lower for keyword in ['моча', 'мочи']):
-                base_cost = random.randint(*COST_RANGES['моча'])
+                base_cost = sum(COST_RANGES['моча']) // 2
             elif 'мазок' in analysis_lower:
-                base_cost = random.randint(*COST_RANGES['мазок'])
+                base_cost = sum(COST_RANGES['мазок']) // 2
             elif any(keyword in analysis_lower for keyword in ['рентген', 'рентгена']):
-                base_cost = random.randint(*COST_RANGES['рентген'])
+                base_cost = sum(COST_RANGES['рентген']) // 2
             elif 'узи' in analysis_lower:
-                base_cost = random.randint(*COST_RANGES['узи'])
+                base_cost = sum(COST_RANGES['узи']) // 2
             elif any(keyword in analysis_lower for keyword in ['мрт', 'томография']):
-                base_cost = random.randint(*COST_RANGES['мрт'])
+                base_cost = sum(COST_RANGES['мрт']) // 2
             elif 'кт' in analysis_lower:
-                base_cost = random.randint(*COST_RANGES['кт'])
+                base_cost = sum(COST_RANGES['кт']) // 2
             else:
-                base_cost = random.randint(500, 3000)  # Базовый диапазон
+                base_cost = 1750  # Средняя цена базового диапазона (500-3000)
         
-        # Добавляем случайное отклонение ±20%
-        variation = random.uniform(0.8, 1.2)
-        total_cost += int(base_cost * variation)
+        # Добавляем без случайного отклонения - фиксированная цена
+        total_cost += base_cost
     
     return total_cost
 
