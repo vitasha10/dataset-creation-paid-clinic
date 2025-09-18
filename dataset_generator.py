@@ -21,17 +21,38 @@ from utils import (
     format_symptoms_string, format_analyses_string, format_cost_string,
     validate_business_logic, generate_batch_clients
 )
+import sys
 
+def configure_stdio_utf8():
+    """Настройка stdout/stderr на UTF-8, чтобы консольный лог не падал на Windows."""
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        # В крайнем случае просто продолжаем: лог в файл все равно будет в UTF-8
+        pass
 
 def setup_logging():
-    """Настройка логирования"""
+    """Настройка логирования с устойчивой к Unicode консолью и UTF-8 файлом лога."""
+    handlers = []
+
+    # Лог в файл — всегда UTF-8
+    handlers.append(logging.FileHandler("dataset_generation.log", encoding="utf-8"))
+
+    # Консоль: после configure_stdio_utf8 стандартные потоки уже UTF-8
+    try:
+        handlers.append(logging.StreamHandler())
+    except Exception:
+        # Если консоль недоступна, просто пропустим
+        pass
+
     logging.basicConfig(
         level=getattr(logging, LOG_LEVEL),
         format=LOG_FORMAT,
-        handlers=[
-            logging.FileHandler('dataset_generation.log'),
-            logging.StreamHandler()
-        ]
+        handlers=handlers,
+        force=True,  # сбросить любые ранее добавленные хэндлеры, которые могли быть не-UTF-8
     )
 
 
@@ -404,6 +425,7 @@ class DatasetGenerator:
 
 def main():
     """Основная функция запуска генератора"""
+    configure_stdio_utf8()
     parser = argparse.ArgumentParser(
         description='Генератор датасета для платной поликлиники'
     )
