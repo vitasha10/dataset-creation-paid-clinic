@@ -286,6 +286,24 @@ class DatasetGenerator:
             
             dataset.extend(batch_records)
             
+            # Логируем 1-2 примера паспортов с полным раскладом по требованию TODO.md
+            if batch_records and len(batch_records) >= 2:
+                sample_records = batch_records[:2]
+                for idx, record in enumerate(sample_records):
+                    if record.get('passport_country') == 'ru':
+                        self.logger.info(f"Пример паспорта RU #{idx+1}: "
+                                       f"ФИО={record.get('FIO', '')}, "
+                                       f"Паспорт={record.get('passport_data', '')}, "
+                                       f"Дата выдачи={record.get('passport_issue_date', '')}, "
+                                       f"Код подразделения={record.get('passport_department_code', '')}, "
+                                       f"СНИЛС={record.get('SNILS', '')}")
+                    else:
+                        country = record.get('passport_country', 'unknown')
+                        self.logger.info(f"Пример паспорта {country.upper()} #{idx+1}: "
+                                       f"ФИО={record.get('FIO', '')}, "
+                                       f"Паспорт={record.get('passport_data', '')}, "
+                                       f"СНИЛС={record.get('SNILS', 'нет')}")
+            
             # Логируем прогресс
             progress = len(dataset) / size * 100
             self.logger.info(f"Прогресс: {progress:.1f}% ({len(dataset)}/{size})")
@@ -335,7 +353,11 @@ class DatasetGenerator:
                 'payment_card': 'Карта оплаты'
             }
             
-            # Удаляем колонки, которые не должны быть в итоговом файле согласно требованиям
+            # Согласно TODO.md требованиям добавляем дополнительные колонки для паспортов
+            # Но сохраняем только основные согласно изначальному заданию
+            columns_to_keep_optional = ['passport_country', 'passport_issue_date', 'passport_department_code']
+            
+            # Можно оставить эти колонки для отладки, но для финального MVP убираем
             columns_to_drop = ['passport_country', 'passport_issue_date', 'passport_department_code']
             df_final = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
             

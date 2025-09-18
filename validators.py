@@ -39,9 +39,12 @@ def validate_passport_ru(passport_data: str, passport_issue_date: str = None,
         else:
             # Проверка соответствия региона
             series_region = int(series[:2])
-            dept_region = int(passport_department_code[:3])  # Первые 3 цифры кода подразделения
+            # Код подразделения имеет формат RRR-UUU, где RRR - это регион в 3-значном формате
+            dept_code_part = passport_department_code.split('-')[0]  # Например, "077"
+            dept_region = int(dept_code_part)  # 77
+            
             if series_region != dept_region:
-                errors.append("Регион в серии паспорта не соответствует коду подразделения")
+                errors.append(f"Регион в серии паспорта ({series_region}) не соответствует коду подразделения ({dept_region})")
     
     # Проверка даты выдачи
     if passport_issue_date:
