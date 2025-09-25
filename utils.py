@@ -299,7 +299,8 @@ def generate_symptoms_by_doctor(doctor: str, min_count: int = 1, max_count: int 
         selected = doctor_symptoms.copy()
         
         # Добавляем общие симптомы для достижения нужного количества
-        general_symptoms = ["головная боль", "слабость", "температура", "тошнота", "головокружение"]
+        general_symptoms = ["общая слабость", "головная боль", "незначительное повышение температуры", 
+                           "легкая тошнота", "общее недомогание"]
         additional_needed = count - len(selected)
         
         available_general = [s for s in general_symptoms if s not in selected]
@@ -385,18 +386,30 @@ def select_doctor_by_symptoms(symptoms: List[str]) -> str:
     for doctor, doctor_symptoms in DOCTOR_SYMPTOM_MAPPING.items():
         score = 0
         for symptom in symptoms:
-            if any(doc_symptom in symptom for doc_symptom in doctor_symptoms):
-                score += 1
+            # Более точное сопоставление - проверяем точные совпадения и частичные
+            for doc_symptom in doctor_symptoms:
+                if doc_symptom.lower() in symptom.lower() or symptom.lower() in doc_symptom.lower():
+                    score += 1
+                    break  # Избегаем двойного подсчета одного симптома
         doctor_scores[doctor] = score
     
-    # Если есть совпадения, выбираем врача с наибольшим score
-    if any(score > 0 for score in doctor_scores.values()):
-        max_score = max(doctor_scores.values())
+    # Если есть хорошие совпадения (2+ симптома), выбираем врача с наибольшим score
+    max_score = max(doctor_scores.values()) if doctor_scores.values() else 0
+    if max_score >= 2:
         best_doctors = [doc for doc, score in doctor_scores.items() if score == max_score]
         return random.choice(best_doctors)
     
-    # Если совпадений нет, идем к терапевту (с 70% вероятностью) или случайному врачу
-    if random.random() < 0.7:
+    # Если есть хотя бы одно совпадение, но не очень специфичное
+    elif max_score >= 1:
+        best_doctors = [doc for doc, score in doctor_scores.items() if score == max_score]
+        # 70% шанс выбрать специалиста, 30% - терапевта
+        if random.random() < 0.7:
+            return random.choice(best_doctors)
+        else:
+            return "терапевт"
+    
+    # Если совпадений нет или они очень слабые, чаще идем к терапевту
+    if random.random() < 0.8:  # Увеличили вероятность терапевта
         return "терапевт"
     else:
         return random.choice(DOCTORS_SPECIALIZATIONS)
