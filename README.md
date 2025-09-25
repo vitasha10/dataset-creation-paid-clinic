@@ -1,3 +1,5 @@
+![screen.png](screen.png)
+
 # dataset-creation-paid-clinic
 
 Лабораторная работа №1 — Создание датасета. II. Вариант (Платная поликлиника)
