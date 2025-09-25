@@ -214,13 +214,20 @@ class DatasetGenerator:
         # Выбираем клиента
         client = self.select_client()
         
-        # ИСПРАВЛЕННАЯ ЛОГИКА: Сначала генерируем реалистичные симптомы, затем врача
-        # Генерируем 1-3 общих симптома
-        from data_dictionaries import SYMPTOMS_DICT
-        symptoms = random.sample(SYMPTOMS_DICT, random.randint(1, 3))
+        # ИСПРАВЛЕННАЯ ЛОГИКА: Используем улучшенную логику генерации симптомов и врачей
+        # Вариант 1: 80% - врач по полу, затем симптомы по врачу (более реалистично)
+        # Вариант 2: 20% - симптомы первичные, затем врач по симптомам
         
-        # Выбираем врача на основе симптомов
-        doctor = select_doctor_by_symptoms(symptoms)
+        if random.random() < 0.8:
+            # Сначала выбираем врача по полу клиента, затем генерируем подходящие симптомы
+            doctor = select_doctor_by_gender(client['gender'])
+            symptoms = generate_symptoms_by_doctor(doctor, min_count=1, max_count=3)
+        else:
+            # Сначала генерируем симптомы, затем выбираем врача по симптомам
+            # Выбираем случайного врача для генерации симптомов, затем корректируем выбор
+            temp_doctor = random.choice(DOCTORS_SPECIALIZATIONS)
+            symptoms = generate_symptoms_by_doctor(temp_doctor, min_count=1, max_count=3)
+            doctor = select_doctor_by_symptoms(symptoms)
         
         # Если врач не подходит по полу клиента, корректируем
         from data_dictionaries import DOCTORS_MALE, DOCTORS_FEMALE
