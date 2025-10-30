@@ -168,10 +168,17 @@ class DepersonalizationApp:
         input_entry = ttk.Entry(bottom_frame, textvariable=self.input_file_var, width=40)
         input_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(0, 5))
         
-        # Кнопка выбора входного файла
-        input_btn = ttk.Button(bottom_frame, text="Выбрать...", 
+        # Кнопки для входного файла
+        input_buttons_frame = ttk.Frame(bottom_frame)
+        input_buttons_frame.grid(row=2, column=1, sticky=tk.W, pady=(5, 0))
+        
+        input_btn = ttk.Button(input_buttons_frame, text="Выбрать...", 
                               command=self.select_input_file)
-        input_btn.grid(row=2, column=1, sticky=tk.W, pady=(5, 0))
+        input_btn.pack(side=tk.LEFT, padx=(0, 5))
+        
+        input_copy_btn = ttk.Button(input_buttons_frame, text="Скопировать", 
+                                    command=lambda: self.copy_to_clipboard(self.input_file_var.get()))
+        input_copy_btn.pack(side=tk.LEFT)
         
         # Поле ввода для выходного файла
         ttk.Label(bottom_frame, text="Depersonalization:").grid(row=1, column=2, 
@@ -180,16 +187,33 @@ class DepersonalizationApp:
         output_entry = ttk.Entry(bottom_frame, textvariable=self.output_file_var, width=40)
         output_entry.grid(row=1, column=3, sticky=(tk.W, tk.E))
         
-        # Кнопка выбора выходного файла
-        output_btn = ttk.Button(bottom_frame, text="Выбрать...", 
-                               command=self.select_output_file)
-        output_btn.grid(row=2, column=3, sticky=tk.W, pady=(5, 0))
+        # Кнопки для выходного файла
+        output_buttons_frame = ttk.Frame(bottom_frame)
+        output_buttons_frame.grid(row=2, column=3, sticky=tk.W, pady=(5, 0))
         
-        # Строка состояния
+        output_btn = ttk.Button(output_buttons_frame, text="Выбрать...", 
+                               command=self.select_output_file)
+        output_btn.pack(side=tk.LEFT, padx=(0, 5))
+        
+        output_copy_btn = ttk.Button(output_buttons_frame, text="Скопировать", 
+                                     command=lambda: self.copy_to_clipboard(self.output_file_var.get()))
+        output_copy_btn.pack(side=tk.LEFT)
+        
+        # Строка состояния с увеличенным шрифтом (в 2 раза больше)
         self.status_var = tk.StringVar(value="Готов к работе. K-anonymity считается по ВСЕМ столбцам датасета.")
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, 
-                              relief=tk.SUNKEN, anchor=tk.W)
+                              relief=tk.SUNKEN, anchor=tk.W, font=('Arial', 14))  # Увеличенный шрифт
         status_bar.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+    
+    def copy_to_clipboard(self, text):
+        """Копировать текст в буфер обмена"""
+        if text:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update()  # Обновляем буфер обмена
+            messagebox.showinfo("Скопировано", f"Путь скопирован в буфер обмена:\n{text}")
+        else:
+            messagebox.showwarning("Предупреждение", "Нет текста для копирования")
     
     def select_all_qi(self):
         """Выбрать все квази-идентификаторы"""

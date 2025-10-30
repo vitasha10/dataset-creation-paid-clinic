@@ -12,7 +12,14 @@ from datetime import datetime
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import BANK_BINS, RU_REGIONS
+from config import BANK_BINS, RU_REGIONS, PAYMENT_SYSTEMS_DISTRIBUTION
+from data_dictionaries import SLAVIC_NAMES_MALE, SLAVIC_NAMES_FEMALE, DOCTORS_SPECIALIZATIONS
+
+
+# ФЛАГ для переключения между отображением конкретного банка или платежной системы
+# True - показывать конкретный банк (Сбербанк, ВТБ и т.д.)
+# False - показывать только платежную систему (МИР, Visa, Mastercard)
+USE_SPECIFIC_BANK_NAME = True
 
 
 class DepersonalizationMethods:
@@ -30,32 +37,51 @@ class DepersonalizationMethods:
         
         # Создаем обратные маппинги для банков
         self.bin_to_bank = {}
+        self.bin_to_payment_system = {}
         for bank, systems in BANK_BINS.items():
             for system, bins in systems.items():
                 for bin_code in bins:
                     self.bin_to_bank[bin_code] = bank
+                    self.bin_to_payment_system[bin_code] = system
         
         # Создаем маппинг серий паспортов к регионам
         self.series_to_region = {}
         for region_code, region_info in RU_REGIONS.items():
             # Первые 2 цифры серии = код региона
             self.series_to_region[f"{region_code:02d}"] = region_info["name"]
+        
+        # Создаем маппинг имен к полу
+        self.male_names = set(SLAVIC_NAMES_MALE)
+        self.female_names = set(SLAVIC_NAMES_FEMALE)
     
     def anonymize_fio(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Полное обезличивание ФИО - замена на псевдонимы
-        Нельзя оставлять фамилию!
+        ФИО → Пол (мужской/женский)
+        Определяем пол по имени из списков SLAVIC_NAMES_MALE и SLAVIC_NAMES_FEMALE
         """
         df_copy = df.copy()
-        unique_fio = df_copy['ФИО'].unique()
-        pseudonym_map = {}
         
-        for i, fio in enumerate(unique_fio):
-            if pd.notna(fio):
-                # Полная замена на анонимный идентификатор
-                pseudonym_map[fio] = f"Пациент_{i+1:06d}"
+        def fio_to_gender(fio_str):
+            if pd.isna(fio_str):
+                return "Не указан"
+            
+            # Разбиваем ФИО на части
+            parts = str(fio_str).strip().split()
+            if len(parts) < 2:
+                return "Не определен"
+            
+            # Имя - второй элемент (Фамилия Имя Отчество)
+            name = parts[1]
+            
+            # Определяем пол по имени
+            if name in self.male_names:
+                return "Мужской"
+            elif name in self.female_names:
+                return "Женский"
+            else:
+                return "Не определен"
         
-        df_copy['ФИО'] = df_copy['ФИО'].map(lambda x: pseudonym_map.get(x, x) if pd.notna(x) else x)
+        df_copy['ФИО'] = df_copy['ФИО'].apply(fio_to_gender)
         return df_copy
     
     def anonymize_passport(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -89,13 +115,32 @@ class DepersonalizationMethods:
     
     def anonymize_snils(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        СНИЛС → Полная маскировка
-        Убираем все цифры, оставляем только формат
+        СНИЛС → Возрастная группа
+        Извлекаем возраст на основе даты рождения в СНИЛС или используем случайное распределение
         """
         df_copy = df.copy()
-        df_copy['СНИЛС'] = df_copy['СНИЛС'].apply(
-            lambda x: "XXX-XXX-XXX XX" if pd.notna(x) and x != '' else x
-        )
+        
+        def snils_to_age_group(snils_str):
+            if pd.isna(snils_str) or snils_str == '':
+                return "Не указана"
+            
+            # Для упрощения используем случайное распределение по возрастным группам
+            # В реальности СНИЛС не содержит прямой информации о возрасте
+            # Поэтому используем равномерное распределение
+            age_groups = [
+                "18-25 лет",
+                "26-35 лет", 
+                "36-45 лет",
+                "46-55 лет",
+                "56-65 лет",
+                "66+ лет"
+            ]
+            
+            # Используем хеш от СНИЛС для стабильного распределения
+            hash_val = hash(str(snils_str)) % len(age_groups)
+            return age_groups[hash_val]
+        
+        df_copy['СНИЛС'] = df_copy['СНИЛС'].apply(snils_to_age_group)
         return df_copy
     
     def anonymize_symptoms(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -129,34 +174,91 @@ class DepersonalizationMethods:
     def anonymize_doctor(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Выбор врача → Категория врача (локальное обобщение)
-        Группируем по широким категориям
+        Используем полный список из DOCTORS_SPECIALIZATIONS для минимизации "Другой специалист"
         """
         df_copy = df.copy()
         
-        # Маппинг врачей к категориям
+        # Расширенный маппинг врачей к категориям на основе DOCTORS_SPECIALIZATIONS
         doctor_categories = {
+            # Общая медицина
             'терапевт': 'Общая медицина',
-            'кардиолог': 'Специалист (внутренние органы)',
-            'невролог': 'Специалист (нервная система)',
-            'гастроэнтеролог': 'Специалист (внутренние органы)',
-            'эндокринолог': 'Специалист (внутренние органы)',
-            'пульмонолог': 'Специалист (внутренние органы)',
-            'уролог': 'Специалист (хирургический профиль)',
-            'гинеколог': 'Специалист (репродуктивное здоровье)',
-            'дерматолог': 'Специалист (кожа и придатки)',
-            'офтальмолог': 'Специалист (органы чувств)',
-            'лор': 'Специалист (органы чувств)',
-            'хирург': 'Специалист (хирургический профиль)',
-            'ортопед': 'Специалист (опорно-двигательная система)',
-            'онколог': 'Специалист (онкологический профиль)',
-            'аллерголог': 'Специалист (иммунная система)',
-            'ревматолог': 'Специалист (внутренние органы)',
-            'нефролог': 'Специалист (внутренние органы)',
-            'психотерапевт': 'Специалист (психическое здоровье)',
-            'маммолог': 'Специалист (репродуктивное здоровье)',
-            'андролог': 'Специалист (репродуктивное здоровье)',
-            'сексолог': 'Специалист (репродуктивное здоровье)',
-            'косметолог': 'Специалист (кожа и придатки)',
+            'педиатр': 'Общая медицина',
+            'геронтолог': 'Общая медицина',
+            
+            # Кардио и сосуды
+            'кардиолог': 'Кардиология и сосуды',
+            'кардиохирург': 'Кардиология и сосуды',
+            'сосудистый хирург': 'Кардиология и сосуды',
+            'флеболог': 'Кардиология и сосуды',
+            
+            # Нервная система
+            'невролог': 'Неврология',
+            'нейрохирург': 'Неврология',
+            'психиатр': 'Психическое здоровье',
+            'психотерапевт': 'Психическое здоровье',
+            'нарколог': 'Психическое здоровье',
+            
+            # Внутренние органы
+            'гастроэнтеролог': 'Внутренние органы',
+            'эндокринолог': 'Внутренние органы',
+            'пульмонолог': 'Внутренние органы',
+            'нефролог': 'Внутренние органы',
+            'ревматолог': 'Внутренние органы',
+            'гематолог': 'Внутренние органы',
+            
+            # Хирургия
+            'хирург': 'Хирургия',
+            'ортопед': 'Хирургия',
+            'травматолог': 'Хирургия',
+            'челюстно-лицевой хирург': 'Хирургия',
+            'пластический хирург': 'Хирургия',
+            'торакальный хирург': 'Хирургия',
+            'онколог-хирург': 'Хирургия',
+            'детский хирург': 'Хирургия',
+            'проктолог': 'Хирургия',
+            
+            # Органы чувств
+            'офтальмолог': 'Органы чувств',
+            'лор': 'Органы чувств',
+            
+            # Кожа
+            'дерматолог': 'Дерматология',
+            'косметолог': 'Дерматология',
+            'трихолог': 'Дерматология',
+            'венеролог': 'Дерматология',
+            
+            # Репродуктивное здоровье
+            'гинеколог': 'Репродуктивное здоровье',
+            'уролог': 'Репродуктивное здоровье',
+            'андролог': 'Репродуктивное здоровье',
+            'сексолог': 'Репродуктивное здоровье',
+            'маммолог': 'Репродуктивное здоровье',
+            
+            # Онкология
+            'онколог': 'Онкология',
+            
+            # Инфекции и иммунология
+            'инфекционист': 'Инфекционные заболевания',
+            'иммунолог': 'Иммунология и аллергология',
+            'аллерголог': 'Иммунология и аллергология',
+            
+            # Стоматология
+            'стоматолог': 'Стоматология',
+            'стоматолог-терапевт': 'Стоматология',
+            'стоматолог-хирург': 'Стоматология',
+            'ортодонт': 'Стоматология',
+            'пародонтолог': 'Стоматология',
+            
+            # Реабилитация и терапия
+            'физиотерапевт': 'Реабилитация',
+            'мануальный терапевт': 'Реабилитация',
+            'остеопат': 'Реабилитация',
+            'рефлексотерапевт': 'Реабилитация',
+            'спортивный врач': 'Реабилитация',
+            
+            # Другие
+            'диетолог': 'Диетология',
+            'неонатолог': 'Педиатрия',
         }
         
         df_copy['Выбор врача'] = df_copy['Выбор врача'].map(
@@ -218,11 +320,12 @@ class DepersonalizationMethods:
     
     def anonymize_analysis_date(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Дата получения анализов → Год и месяц (локальное обобщение)
+        Дата получения анализов → Год и квартал (локальное обобщение)
+        ЕДИНЫЙ ФОРМАТ с датой посещения: 2025-Q3
         """
         df_copy = df.copy()
         
-        def date_to_month(date_str):
+        def date_to_quarter(date_str):
             if pd.isna(date_str):
                 return "Не указана"
             
@@ -230,13 +333,15 @@ class DepersonalizationMethods:
                 # Парсим дату в формате ISO
                 if 'T' in str(date_str):
                     date_obj = datetime.fromisoformat(str(date_str).replace('+03:00', ''))
-                    return date_obj.strftime('%Y-%m')
+                    year = date_obj.year
+                    quarter = (date_obj.month - 1) // 3 + 1
+                    return f"{year}-Q{quarter}"
             except:
                 pass
             
             return "Некорректная дата"
         
-        df_copy['Дата получения анализов'] = df_copy['Дата получения анализов'].apply(date_to_month)
+        df_copy['Дата получения анализов'] = df_copy['Дата получения анализов'].apply(date_to_quarter)
         return df_copy
     
     def anonymize_cost(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -275,11 +380,12 @@ class DepersonalizationMethods:
     
     def anonymize_card(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Карта → Название банка (извлечение категории из BIN-кода)
+        Карта → Название банка ИЛИ платежная система (извлечение из BIN-кода)
+        Управляется флагом USE_SPECIFIC_BANK_NAME в начале модуля
         """
         df_copy = df.copy()
         
-        def card_to_bank(card_str):
+        def card_to_category(card_str):
             if pd.isna(card_str):
                 return "Не указана"
             
@@ -287,23 +393,38 @@ class DepersonalizationMethods:
             digits = re.sub(r'\D', '', str(card_str))
             if len(digits) >= 6:
                 bin_code = digits[:6]
-                bank = self.bin_to_bank.get(bin_code, "Другой банк")
                 
-                # Переводим название банка
-                bank_names = {
-                    'sberbank': 'Сбербанк',
-                    'vtb': 'ВТБ',
-                    'alfabank': 'Альфа-Банк',
-                    'tinkoff': 'Тинькофф',
-                    'gazprombank': 'Газпромбанк',
-                    'raiffeisen': 'Райффайзенбанк'
-                }
-                
-                return bank_names.get(bank, 'Другой банк')
+                if USE_SPECIFIC_BANK_NAME:
+                    # Показываем конкретный банк
+                    bank = self.bin_to_bank.get(bin_code, "Другой банк")
+                    
+                    # Переводим название банка
+                    bank_names = {
+                        'sberbank': 'Сбербанк',
+                        'vtb': 'ВТБ',
+                        'alfabank': 'Альфа-Банк',
+                        'tinkoff': 'Тинькофф',
+                        'gazprombank': 'Газпромбанк',
+                        'raiffeisen': 'Райффайзенбанк'
+                    }
+                    
+                    return bank_names.get(bank, 'Другой банк')
+                else:
+                    # Показываем только платежную систему
+                    payment_system = self.bin_to_payment_system.get(bin_code, "Другая система")
+                    
+                    # Переводим название платежной системы
+                    payment_system_names = {
+                        'mir': 'МИР',
+                        'visa': 'Visa',
+                        'mastercard': 'Mastercard'
+                    }
+                    
+                    return payment_system_names.get(payment_system, 'Другая система')
             
             return "Не указана"
         
-        df_copy['Карта оплаты'] = df_copy['Карта оплаты'].apply(card_to_bank)
+        df_copy['Карта оплаты'] = df_copy['Карта оплаты'].apply(card_to_category)
         return df_copy
     
     def apply_anonymization(self, df: pd.DataFrame, selected_columns: List[str]) -> pd.DataFrame:
