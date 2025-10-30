@@ -1,14 +1,15 @@
 """
-Главное приложение для обезличивания данных с GUI на Tkinter
+Главное приложение для обезличивания данных с GUI на Tkinter (переработанное)
 """
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import pandas as pd
 from pathlib import Path
 import sys
+import time
 
-from depersonalization_methods import DepersonalizationMethods
-from k_anonymity import KAnonymityCalculator
+from depersonalization_methods_new import DepersonalizationMethods
+from k_anonymity_new import KAnonymityCalculator
 from utility_evaluator import DataUtilityEvaluator
 
 
@@ -37,7 +38,7 @@ class DepersonalizationApp:
             root: корневое окно Tkinter
         """
         self.root = root
-        self.root.title("Лабораторная работа №2 - Обезличивание данных")
+        self.root.title("Лабораторная работа №2 - Обезличивание данных (обновленная версия)")
         self.root.geometry("1200x800")
         
         # Данные
@@ -51,7 +52,7 @@ class DepersonalizationApp:
         self.k_calculator = KAnonymityCalculator()
         self.utility_evaluator = DataUtilityEvaluator()
         
-        # Квази-идентификаторы
+        # Квази-идентификаторы (все по умолчанию выбраны)
         self.quasi_identifiers_vars = {}
         
         # Результаты k-anonymity
@@ -110,12 +111,12 @@ class DepersonalizationApp:
         right_header.grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
         
         # Левая панель - выбор квази-идентификаторов
-        left_frame = ttk.LabelFrame(main_frame, text="Квази-идентификаторы", padding="10")
+        left_frame = ttk.LabelFrame(main_frame, text="Квази-идентификаторы (методы предопределены)", padding="10")
         left_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
         
-        # Чекбоксы для квази-идентификаторов
+        # Чекбоксы для квази-идентификаторов (ВСЕ ПО УМОЛЧАНИЮ ВЫБРАНЫ)
         for i, column in enumerate(self.DATASET_COLUMNS):
-            var = tk.BooleanVar(value=False)
+            var = tk.BooleanVar(value=True)  # ПО УМОЛЧАНИЮ ВСЕ ВЫБРАНЫ!
             self.quasi_identifiers_vars[column] = var
             cb = ttk.Checkbutton(left_frame, text=column, variable=var)
             cb.grid(row=i, column=0, sticky=tk.W, pady=2)
@@ -130,7 +131,7 @@ class DepersonalizationApp:
                               command=self.clear_all_qi)
         clear_btn.grid(row=len(self.DATASET_COLUMNS)+1, column=0, pady=(5, 0), sticky=tk.W)
         
-        # Правая панель - топ плохих k-anonymity
+        # Правая панель - результаты K-anonymity
         right_frame = ttk.LabelFrame(main_frame, text="Топ плохих K-anonymity", padding="10")
         right_frame.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(5, 0))
         right_frame.columnconfigure(0, weight=1)
@@ -185,7 +186,7 @@ class DepersonalizationApp:
         output_btn.grid(row=2, column=3, sticky=tk.W, pady=(5, 0))
         
         # Строка состояния
-        self.status_var = tk.StringVar(value="Готов к работе")
+        self.status_var = tk.StringVar(value="Готов к работе. K-anonymity считается по ВСЕМ столбцам датасета.")
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, 
                               relief=tk.SUNKEN, anchor=tk.W)
         status_bar.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
@@ -229,7 +230,7 @@ class DepersonalizationApp:
             self.output_file_var.set(filename)
     
     def load_dataset(self, filename=None):
-        """Загрузка датасета"""
+        """Загрузка датасета с оптимизацией для больших файлов"""
         try:
             if filename is None:
                 filename = filedialog.askopenfilename(
@@ -240,13 +241,20 @@ class DepersonalizationApp:
             if not filename:
                 return
             
-            self.status_var.set("Загрузка датасета...")
+            self.status_var.set("Загрузка датасета... Пожалуйста, подождите...")
             self.root.update()
             
-            # Загружаем файл
-            self.original_df = pd.read_excel(filename)
+            start_time = time.time()
+            
+            # Загружаем файл с оптимизацией
+            # Используем chunksize для больших файлов
+            print(f"Загрузка файла: {filename}")
+            self.original_df = pd.read_excel(filename, engine='openpyxl')
             self.anonymized_df = self.original_df.copy()
             self.input_file = filename
+            
+            load_time = time.time() - start_time
+            print(f"Файл загружен за {load_time:.2f} сек")
             
             # Обновляем поле ввода
             self.input_file_var.set(filename)
@@ -261,8 +269,8 @@ class DepersonalizationApp:
                     f"В датасете отсутствуют столбцы:\n" + "\n".join(missing_columns)
                 )
             
-            self.status_var.set(f"Датасет загружен: {len(self.original_df)} записей")
-            messagebox.showinfo("Успех", f"Датасет загружен успешно!\nЗаписей: {len(self.original_df)}")
+            self.status_var.set(f"Датасет загружен: {len(self.original_df)} записей за {load_time:.2f} сек")
+            messagebox.showinfo("Успех", f"Датасет загружен успешно!\nЗаписей: {len(self.original_df)}\nВремя: {load_time:.2f} сек")
             
         except Exception as e:
             self.status_var.set("Ошибка загрузки")
@@ -288,49 +296,47 @@ class DepersonalizationApp:
             if not output_file:
                 return
             
-            self.status_var.set("Сохранение датасета...")
+            self.status_var.set("Сохранение датасета... Пожалуйста, подождите...")
             self.root.update()
             
+            start_time = time.time()
+            
             # Сохраняем
-            self.anonymized_df.to_excel(output_file, index=False, sheet_name='Обезличенные данные')
+            self.anonymized_df.to_excel(output_file, index=False, sheet_name='Обезличенные данные', engine='openpyxl')
+            
+            save_time = time.time() - start_time
             
             self.output_file = output_file
             self.output_file_var.set(output_file)
             
-            self.status_var.set(f"Датасет сохранен: {output_file}")
-            messagebox.showinfo("Успех", f"Датасет сохранен успешно!\n{output_file}")
+            self.status_var.set(f"Датасет сохранен: {output_file} за {save_time:.2f} сек")
+            messagebox.showinfo("Успех", f"Датасет сохранен успешно!\n{output_file}\nВремя: {save_time:.2f} сек")
             
         except Exception as e:
             self.status_var.set("Ошибка сохранения")
             messagebox.showerror("Ошибка", f"Не удалось сохранить файл:\n{str(e)}")
     
     def calculate_k_anonymity(self):
-        """Расчет K-анонимности"""
+        """Расчет K-анонимности по ВСЕМ столбцам"""
         try:
             if self.anonymized_df is None:
                 messagebox.showwarning("Предупреждение", "Сначала загрузите датасет")
                 return
             
-            # Получаем выбранные квази-идентификаторы
-            selected_qi = self.get_selected_qi()
-            
-            if not selected_qi:
-                messagebox.showwarning("Предупреждение", 
-                                     "Выберите хотя бы один квази-идентификатор")
-                return
-            
-            self.status_var.set("Расчет K-anonymity...")
+            self.status_var.set("Расчет K-anonymity по ВСЕМ столбцам... Пожалуйста, подождите...")
             self.root.update()
             
-            # Рассчитываем K-анонимность
-            self.k_analysis = self.k_calculator.calculate_k_anonymity(
-                self.anonymized_df, selected_qi
-            )
+            start_time = time.time()
+            
+            # Рассчитываем K-анонимность по ВСЕМ столбцам
+            self.k_analysis = self.k_calculator.calculate_k_anonymity(self.anonymized_df)
+            
+            calc_time = time.time() - start_time
             
             # Отображаем результаты
             self.display_k_results()
             
-            self.status_var.set("K-anonymity рассчитан")
+            self.status_var.set(f"K-anonymity рассчитан за {calc_time:.2f} сек (по всем {len(self.anonymized_df.columns)} столбцам)")
             
         except Exception as e:
             self.status_var.set("Ошибка расчета")
@@ -348,6 +354,7 @@ class DepersonalizationApp:
         output = []
         output.append("=" * 50)
         output.append("РЕЗУЛЬТАТЫ K-ANONYMITY")
+        output.append("(расчет по ВСЕМ столбцам)")
         output.append("=" * 50)
         output.append("")
         
@@ -383,10 +390,7 @@ class DepersonalizationApp:
         output.append("")
         
         # Уникальные строки (K=1)
-        unique_rows = self.k_calculator.get_unique_rows(
-            self.anonymized_df, 
-            self.get_selected_qi()
-        )
+        unique_rows = self.k_calculator.get_unique_rows(self.anonymized_df)
         
         output.append(f"УНИКАЛЬНЫЕ СТРОКИ (K=1): {len(unique_rows)}")
         
@@ -399,145 +403,43 @@ class DepersonalizationApp:
         self.k_results_text.insert(1.0, "\n".join(output))
     
     def depersonalize_dataset(self):
-        """Обезличивание датасета"""
+        """Обезличивание датасета с предопределенными методами"""
         try:
             if self.original_df is None:
                 messagebox.showwarning("Предупреждение", "Сначала загрузите датасет")
                 return
             
-            # Создаем диалог выбора методов
-            self.show_depersonalization_dialog()
+            # Получаем выбранные столбцы
+            selected_columns = self.get_selected_qi()
             
-        except Exception as e:
-            self.status_var.set("Ошибка обезличивания")
-            messagebox.showerror("Ошибка", f"Не удалось обезличить датасет:\n{str(e)}")
-    
-    def show_depersonalization_dialog(self):
-        """Диалог выбора методов обезличивания"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Выбор методов обезличивания")
-        dialog.geometry("600x500")
-        
-        # Описание
-        ttk.Label(dialog, text="Выберите методы обезличивания для применения:", 
-                 font=('Arial', 12, 'bold')).pack(pady=10)
-        
-        # Фрейм с методами
-        methods_frame = ttk.Frame(dialog, padding="10")
-        methods_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Список методов
-        methods = [
-            ("Локальное обобщение", "generalization"),
-            ("Агрегация", "aggregation"),
-            ("Возмущение", "perturbation"),
-            ("Микро-агрегация", "microaggregation"),
-            ("Перемешивание", "shuffling"),
-            ("Создание псевдонимов", "pseudonymization"),
-            ("Маскеризация", "masking"),
-            ("Локальное подавление", "suppression"),
-        ]
-        
-        method_vars = {}
-        for i, (label, method) in enumerate(methods):
-            var = tk.BooleanVar(value=False)
-            method_vars[method] = var
-            cb = ttk.Checkbutton(methods_frame, text=label, variable=var)
-            cb.grid(row=i, column=0, sticky=tk.W, pady=5)
-        
-        # Кнопки
-        button_frame = ttk.Frame(dialog)
-        button_frame.pack(pady=10)
-        
-        def apply_depersonalization():
-            selected_methods = [method for method, var in method_vars.items() if var.get()]
-            
-            if not selected_methods:
-                messagebox.showwarning("Предупреждение", "Выберите хотя бы один метод")
+            if not selected_columns:
+                messagebox.showwarning("Предупреждение", 
+                                     "Выберите хотя бы один столбец для обезличивания")
                 return
             
-            dialog.destroy()
-            self.apply_methods(selected_methods)
-        
-        ttk.Button(button_frame, text="Применить", 
-                  command=apply_depersonalization).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Отмена", 
-                  command=dialog.destroy).pack(side=tk.LEFT, padx=5)
-    
-    def apply_methods(self, methods):
-        """Применение методов обезличивания"""
-        try:
-            self.status_var.set("Применение методов обезличивания...")
+            self.status_var.set("Применение методов обезличивания... Пожалуйста, подождите...")
             self.root.update()
+            
+            start_time = time.time()
             
             # Копируем оригинальный датасет
             self.anonymized_df = self.original_df.copy()
             
-            # Получаем выбранные квази-идентификаторы
-            selected_qi = self.get_selected_qi()
+            # Применяем предопределенные методы
+            self.anonymized_df = self.depers_methods.apply_anonymization(
+                self.anonymized_df, selected_columns
+            )
             
-            if not selected_qi:
-                messagebox.showwarning("Предупреждение", 
-                                     "Выберите квази-идентификаторы для обезличивания")
-                return
+            anon_time = time.time() - start_time
             
-            # Применяем методы
-            for method in methods:
-                if method == "generalization":
-                    for qi in selected_qi:
-                        self.anonymized_df = self.depers_methods.generalization_local(
-                            self.anonymized_df, qi
-                        )
-                
-                elif method == "aggregation":
-                    self.anonymized_df = self.depers_methods.aggregation(
-                        self.anonymized_df, selected_qi
-                    )
-                
-                elif method == "perturbation":
-                    for qi in selected_qi:
-                        self.anonymized_df = self.depers_methods.perturbation(
-                            self.anonymized_df, qi
-                        )
-                
-                elif method == "microaggregation":
-                    for qi in selected_qi:
-                        self.anonymized_df = self.depers_methods.microaggregation(
-                            self.anonymized_df, qi
-                        )
-                
-                elif method == "shuffling":
-                    for qi in selected_qi:
-                        self.anonymized_df = self.depers_methods.shuffling(
-                            self.anonymized_df, qi
-                        )
-                
-                elif method == "pseudonymization":
-                    for qi in selected_qi:
-                        self.anonymized_df = self.depers_methods.pseudonymization(
-                            self.anonymized_df, qi
-                        )
-                
-                elif method == "masking":
-                    for qi in selected_qi:
-                        self.anonymized_df = self.depers_methods.masking(
-                            self.anonymized_df, qi
-                        )
-                
-                elif method == "suppression":
-                    for qi in selected_qi:
-                        self.anonymized_df = self.depers_methods.suppression_local(
-                            self.anonymized_df, qi
-                        )
-            
-            self.status_var.set("Обезличивание завершено")
+            self.status_var.set(f"Обезличивание завершено за {anon_time:.2f} сек")
             messagebox.showinfo("Успех", 
                               f"Методы обезличивания применены успешно!\n"
-                              f"Применено методов: {len(methods)}")
+                              f"Обезличено столбцов: {len(selected_columns)}\n"
+                              f"Время: {anon_time:.2f} сек")
             
             # Автоматически пересчитываем K-anonymity
-            if selected_qi:
-                self.calculate_k_anonymity()
+            self.calculate_k_anonymity()
             
         except Exception as e:
             self.status_var.set("Ошибка обезличивания")

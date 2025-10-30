@@ -1,16 +1,22 @@
 """
-Модуль методов обезличивания данных
+Модуль методов обезличивания данных (переработанный согласно требованиям)
 """
 import pandas as pd
 import numpy as np
 import random
 import re
-from typing import List, Dict, Tuple
-from datetime import datetime, timedelta
+from typing import List, Dict
+from datetime import datetime
+
+# Импортируем конфигурацию из основного проекта
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import BANK_BINS, RU_REGIONS
 
 
 class DepersonalizationMethods:
-    """Класс с методами обезличивания данных"""
+    """Класс с методами обезличивания данных - предопределенные методы для каждого столбца"""
     
     def __init__(self, seed: int = 42):
         """
@@ -21,401 +27,316 @@ class DepersonalizationMethods:
         """
         random.seed(seed)
         np.random.seed(seed)
-    
-    def generalization_local(self, df: pd.DataFrame, column: str) -> pd.DataFrame:
-        """
-        Локальное обобщение - замена точных значений на более общие категории
         
-        Args:
-            df: датафрейм
-            column: имя столбца для обобщения
-            
-        Returns:
-            обновленный датафрейм
+        # Создаем обратные маппинги для банков
+        self.bin_to_bank = {}
+        for bank, systems in BANK_BINS.items():
+            for system, bins in systems.items():
+                for bin_code in bins:
+                    self.bin_to_bank[bin_code] = bank
+        
+        # Создаем маппинг серий паспортов к регионам
+        self.series_to_region = {}
+        for region_code, region_info in RU_REGIONS.items():
+            # Первые 2 цифры серии = код региона
+            self.series_to_region[f"{region_code:02d}"] = region_info["name"]
+    
+    def anonymize_fio(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Полное обезличивание ФИО - замена на псевдонимы
+        Нельзя оставлять фамилию!
+        """
+        df_copy = df.copy()
+        unique_fio = df_copy['ФИО'].unique()
+        pseudonym_map = {}
+        
+        for i, fio in enumerate(unique_fio):
+            if pd.notna(fio):
+                # Полная замена на анонимный идентификатор
+                pseudonym_map[fio] = f"Пациент_{i+1:06d}"
+        
+        df_copy['ФИО'] = df_copy['ФИО'].map(lambda x: pseudonym_map.get(x, x) if pd.notna(x) else x)
+        return df_copy
+    
+    def anonymize_passport(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Паспорт → Регион (локальное обобщение)
+        Извлекаем регион из серии паспорта
         """
         df_copy = df.copy()
         
-        if column == 'ФИО':
-            # Обобщаем до инициалов
-            df_copy[column] = df_copy[column].apply(
-                lambda x: self._generalize_fio(x) if pd.notna(x) else x
-            )
-        elif column == 'Паспортные данные':
-            # Обобщаем паспорт: оставляем только серию
-            df_copy[column] = df_copy[column].apply(
-                lambda x: self._generalize_passport(x) if pd.notna(x) else x
-            )
-        elif column == 'Дата посещения врача' or column == 'Дата получения анализов':
-            # Обобщаем дату до месяца/года
-            df_copy[column] = df_copy[column].apply(
-                lambda x: self._generalize_date(x) if pd.notna(x) else x
-            )
-        elif column == 'Стоимость анализов':
-            # Обобщаем стоимость до диапазона
-            df_copy[column] = df_copy[column].apply(
-                lambda x: self._generalize_cost(x) if pd.notna(x) else x
-            )
-        elif column == 'Карта оплаты':
-            # Обобщаем карту до первых 6 цифр (BIN)
-            df_copy[column] = df_copy[column].apply(
-                lambda x: self._generalize_card(x) if pd.notna(x) else x
-            )
+        def passport_to_region(passport_str):
+            if pd.isna(passport_str):
+                return "Не указан"
+            
+            # Извлекаем первые 2 цифры серии (код региона)
+            match = re.match(r'(\d{2})\d{2}\s+\d{6}', str(passport_str))
+            if match:
+                region_code = match.group(1)
+                region_name = self.series_to_region.get(region_code, "Другой регион")
+                return region_name
+            
+            # Для белорусских и казахских паспортов
+            if re.match(r'[A-Z]{2}\d{7}', str(passport_str)):
+                return "Беларусь"
+            elif re.match(r'N\d{8}', str(passport_str)):
+                return "Казахстан"
+            
+            return "Другой регион"
         
+        df_copy['Паспортные данные'] = df_copy['Паспортные данные'].apply(passport_to_region)
         return df_copy
     
-    def aggregation(self, df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
+    def anonymize_snils(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Агрегация - объединение записей в группы
-        
-        Args:
-            df: датафрейм
-            columns: список столбцов для агрегации
-            
-        Returns:
-            агрегированный датафрейм
+        СНИЛС → Полная маскировка
+        Убираем все цифры, оставляем только формат
+        """
+        df_copy = df.copy()
+        df_copy['СНИЛС'] = df_copy['СНИЛС'].apply(
+            lambda x: "XXX-XXX-XXX XX" if pd.notna(x) and x != '' else x
+        )
+        return df_copy
+    
+    def anonymize_symptoms(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Симптомы → Обобщение (локальное обобщение)
+        Удаляем конкретные детали, оставляем только общие категории
         """
         df_copy = df.copy()
         
-        # Группируем по выбранным столбцам и заменяем значения на групповые
-        if columns:
-            for col in columns:
-                if col in df_copy.columns:
-                    # Для категориальных - оставляем как есть
-                    # Для числовых - усредняем
-                    if col == 'Стоимость анализов':
-                        # Группируем по диапазонам стоимости
-                        df_copy[col] = df_copy[col].apply(
-                            lambda x: self._aggregate_cost(x) if pd.notna(x) else x
-                        )
-        
-        return df_copy
-    
-    def perturbation(self, df: pd.DataFrame, column: str, noise_level: float = 0.1) -> pd.DataFrame:
-        """
-        Возмущение - добавление шума к числовым данным
-        
-        Args:
-            df: датафрейм
-            column: имя столбца для возмущения
-            noise_level: уровень шума (процент от значения)
+        def generalize_symptoms(symptoms_str):
+            if pd.isna(symptoms_str) or symptoms_str == '':
+                return "Не указаны"
             
-        Returns:
-            обновленный датафрейм
-        """
-        df_copy = df.copy()
-        
-        if column == 'Стоимость анализов':
-            df_copy[column] = df_copy[column].apply(
-                lambda x: self._add_noise_to_cost(x, noise_level) if pd.notna(x) else x
-            )
-        elif column in ['Дата посещения врача', 'Дата получения анализов']:
-            df_copy[column] = df_copy[column].apply(
-                lambda x: self._add_noise_to_date(x, days=3) if pd.notna(x) else x
-            )
-        
-        return df_copy
-    
-    def microaggregation(self, df: pd.DataFrame, column: str, k: int = 3) -> pd.DataFrame:
-        """
-        Микро-агрегация - замена значений в малых группах на среднее
-        
-        Args:
-            df: датафрейм
-            column: имя столбца для микро-агрегации
-            k: размер группы
+            # Подсчитываем количество симптомов
+            symptoms = str(symptoms_str).split(',')
+            count = len(symptoms)
             
-        Returns:
-            обновленный датафрейм
-        """
-        df_copy = df.copy()
-        
-        if column == 'Стоимость анализов':
-            # Сортируем и группируем по k записей
-            values = df_copy[column].copy()
-            numeric_values = []
-            
-            for v in values:
-                if pd.notna(v):
-                    # Извлекаем числовое значение
-                    num = self._extract_numeric(str(v))
-                    numeric_values.append(num)
-                else:
-                    numeric_values.append(None)
-            
-            # Микро-агрегация
-            aggregated = []
-            valid_indices = [i for i, v in enumerate(numeric_values) if v is not None]
-            
-            if valid_indices:
-                sorted_valid = sorted(zip(valid_indices, [numeric_values[i] for i in valid_indices]), key=lambda x: x[1])
-                
-                for i in range(0, len(sorted_valid), k):
-                    group = sorted_valid[i:i+k]
-                    avg = sum([v for _, v in group]) / len(group)
-                    for idx, _ in group:
-                        aggregated.append((idx, avg))
-                
-                # Применяем агрегированные значения
-                result_values = numeric_values.copy()
-                for idx, avg_val in aggregated:
-                    result_values[idx] = avg_val
-                
-                df_copy[column] = [f"{int(v)} руб." if v is not None else None for v in result_values]
-        
-        return df_copy
-    
-    def shuffling(self, df: pd.DataFrame, column: str) -> pd.DataFrame:
-        """
-        Перемешивание - случайная перестановка значений в столбце
-        
-        Args:
-            df: датафрейм
-            column: имя столбца для перемешивания
-            
-        Returns:
-            обновленный датафрейм
-        """
-        df_copy = df.copy()
-        
-        if column in df_copy.columns:
-            # Перемешиваем значения
-            values = df_copy[column].values.copy()
-            np.random.shuffle(values)
-            df_copy[column] = values
-        
-        return df_copy
-    
-    def pseudonymization(self, df: pd.DataFrame, column: str) -> pd.DataFrame:
-        """
-        Создание псевдонимов - замена идентификаторов на псевдослучайные значения
-        
-        Args:
-            df: датафрейм
-            column: имя столбца для псевдонимизации
-            
-        Returns:
-            обновленный датафрейм
-        """
-        df_copy = df.copy()
-        
-        if column == 'ФИО':
-            # Создаем псевдонимы для ФИО
-            unique_fio = df_copy[column].unique()
-            pseudonym_map = {fio: f"Клиент_{i+1:05d}" for i, fio in enumerate(unique_fio) if pd.notna(fio)}
-            df_copy[column] = df_copy[column].map(lambda x: pseudonym_map.get(x, x) if pd.notna(x) else x)
-        elif column == 'СНИЛС':
-            # Создаем псевдонимы для СНИЛС
-            unique_snils = df_copy[column].unique()
-            pseudonym_map = {snils: f"XXX-XXX-XXX {i%100:02d}" for i, snils in enumerate(unique_snils) if pd.notna(snils) and snils != ''}
-            df_copy[column] = df_copy[column].map(lambda x: pseudonym_map.get(x, x) if pd.notna(x) and x != '' else x)
-        elif column == 'Паспортные данные':
-            # Создаем псевдонимы для паспортов
-            unique_passport = df_copy[column].unique()
-            pseudonym_map = {p: f"XXXX XXXXXX" for i, p in enumerate(unique_passport) if pd.notna(p)}
-            df_copy[column] = df_copy[column].map(lambda x: pseudonym_map.get(x, x) if pd.notna(x) else x)
-        elif column == 'Карта оплаты':
-            # Маскируем карту
-            df_copy[column] = df_copy[column].apply(
-                lambda x: self._pseudonymize_card(x) if pd.notna(x) else x
-            )
-        
-        return df_copy
-    
-    def masking(self, df: pd.DataFrame, column: str) -> pd.DataFrame:
-        """
-        Маскеризация - частичное скрытие данных
-        
-        Args:
-            df: датафрейм
-            column: имя столбца для маскирования
-            
-        Returns:
-            обновленный датафрейм
-        """
-        df_copy = df.copy()
-        
-        if column == 'ФИО':
-            # Маскируем часть ФИО
-            df_copy[column] = df_copy[column].apply(
-                lambda x: self._mask_fio(x) if pd.notna(x) else x
-            )
-        elif column == 'СНИЛС':
-            # Маскируем СНИЛС
-            df_copy[column] = df_copy[column].apply(
-                lambda x: self._mask_snils(x) if pd.notna(x) and x != '' else x
-            )
-        elif column == 'Паспортные данные':
-            # Маскируем паспорт
-            df_copy[column] = df_copy[column].apply(
-                lambda x: self._mask_passport(x) if pd.notna(x) else x
-            )
-        elif column == 'Карта оплаты':
-            # Маскируем карту
-            df_copy[column] = df_copy[column].apply(
-                lambda x: self._mask_card(x) if pd.notna(x) else x
-            )
-        
-        return df_copy
-    
-    def suppression_local(self, df: pd.DataFrame, column: str, threshold: float = 0.1) -> pd.DataFrame:
-        """
-        Локальное подавление - удаление редких значений
-        
-        Args:
-            df: датафрейм
-            column: имя столбца для подавления
-            threshold: порог частоты (значения встречающиеся реже будут подавлены)
-            
-        Returns:
-            обновленный датафрейм
-        """
-        df_copy = df.copy()
-        
-        if column in df_copy.columns:
-            # Подсчитываем частоту значений
-            value_counts = df_copy[column].value_counts()
-            total = len(df_copy)
-            
-            # Определяем редкие значения
-            rare_values = value_counts[value_counts / total < threshold].index
-            
-            # Подавляем редкие значения
-            df_copy.loc[df_copy[column].isin(rare_values), column] = '*'
-        
-        return df_copy
-    
-    def attribute_removal(self, df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
-        """
-        Удаление атрибутов - полное удаление выбранных столбцов
-        
-        Args:
-            df: датафрейм
-            columns: список столбцов для удаления
-            
-        Returns:
-            обновленный датафрейм
-        """
-        df_copy = df.copy()
-        
-        # Удаляем указанные столбцы
-        columns_to_drop = [col for col in columns if col in df_copy.columns]
-        if columns_to_drop:
-            df_copy = df_copy.drop(columns=columns_to_drop)
-        
-        return df_copy
-    
-    # Вспомогательные методы
-    
-    def _generalize_fio(self, fio: str) -> str:
-        """Обобщение ФИО до инициалов"""
-        parts = fio.split()
-        if len(parts) >= 3:
-            return f"{parts[0]} {parts[1][0]}. {parts[2][0]}."
-        elif len(parts) == 2:
-            return f"{parts[0]} {parts[1][0]}."
-        return fio
-    
-    def _generalize_passport(self, passport: str) -> str:
-        """Обобщение паспорта до серии"""
-        match = re.search(r'(\d{4})\s*\d{6}', str(passport))
-        if match:
-            return f"{match.group(1)} XXXXXX"
-        return passport
-    
-    def _generalize_date(self, date_str: str) -> str:
-        """Обобщение даты до месяца/года"""
-        try:
-            # Парсим дату в формате ISO
-            if 'T' in str(date_str):
-                date_obj = datetime.fromisoformat(str(date_str).replace('+03:00', ''))
-                return date_obj.strftime('%Y-%m')
-            return date_str
-        except:
-            return date_str
-    
-    def _generalize_cost(self, cost_str: str) -> str:
-        """Обобщение стоимости до диапазона"""
-        num = self._extract_numeric(str(cost_str))
-        if num is not None:
-            if num < 1000:
-                return "0-1000 руб."
-            elif num < 3000:
-                return "1000-3000 руб."
-            elif num < 5000:
-                return "3000-5000 руб."
+            # Обобщаем по количеству
+            if count == 1:
+                return "Один симптом"
+            elif count <= 3:
+                return "Несколько симптомов (2-3)"
+            elif count <= 5:
+                return "Несколько симптомов (4-5)"
             else:
-                return "5000+ руб."
-        return cost_str
+                return "Множественные симптомы (6+)"
+        
+        df_copy['Симптомы'] = df_copy['Симптомы'].apply(generalize_symptoms)
+        return df_copy
     
-    def _generalize_card(self, card_str: str) -> str:
-        """Обобщение карты до BIN (первые 6 цифр)"""
-        digits = re.sub(r'\D', '', str(card_str))
-        if len(digits) >= 6:
-            return f"{digits[:6]} XXXX XXXX XXXX"
-        return card_str
+    def anonymize_doctor(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Выбор врача → Категория врача (локальное обобщение)
+        Группируем по широким категориям
+        """
+        df_copy = df.copy()
+        
+        # Маппинг врачей к категориям
+        doctor_categories = {
+            'терапевт': 'Общая медицина',
+            'кардиолог': 'Специалист (внутренние органы)',
+            'невролог': 'Специалист (нервная система)',
+            'гастроэнтеролог': 'Специалист (внутренние органы)',
+            'эндокринолог': 'Специалист (внутренние органы)',
+            'пульмонолог': 'Специалист (внутренние органы)',
+            'уролог': 'Специалист (хирургический профиль)',
+            'гинеколог': 'Специалист (репродуктивное здоровье)',
+            'дерматолог': 'Специалист (кожа и придатки)',
+            'офтальмолог': 'Специалист (органы чувств)',
+            'лор': 'Специалист (органы чувств)',
+            'хирург': 'Специалист (хирургический профиль)',
+            'ортопед': 'Специалист (опорно-двигательная система)',
+            'онколог': 'Специалист (онкологический профиль)',
+            'аллерголог': 'Специалист (иммунная система)',
+            'ревматолог': 'Специалист (внутренние органы)',
+            'нефролог': 'Специалист (внутренние органы)',
+            'психотерапевт': 'Специалист (психическое здоровье)',
+            'маммолог': 'Специалист (репродуктивное здоровье)',
+            'андролог': 'Специалист (репродуктивное здоровье)',
+            'сексолог': 'Специалист (репродуктивное здоровье)',
+            'косметолог': 'Специалист (кожа и придатки)',
+        }
+        
+        df_copy['Выбор врача'] = df_copy['Выбор врача'].map(
+            lambda x: doctor_categories.get(x, 'Другой специалист') if pd.notna(x) else 'Не указан'
+        )
+        return df_copy
     
-    def _aggregate_cost(self, cost_str: str) -> str:
-        """Агрегация стоимости"""
-        num = self._extract_numeric(str(cost_str))
-        if num is not None:
-            # Округляем до ближайших 500 рублей
-            aggregated = round(num / 500) * 500
-            return f"{aggregated} руб."
-        return cost_str
-    
-    def _add_noise_to_cost(self, cost_str: str, noise_level: float) -> str:
-        """Добавление шума к стоимости"""
-        num = self._extract_numeric(str(cost_str))
-        if num is not None:
-            noise = np.random.normal(0, num * noise_level)
-            noisy_value = max(0, int(num + noise))
-            return f"{noisy_value} руб."
-        return cost_str
-    
-    def _add_noise_to_date(self, date_str: str, days: int) -> str:
-        """Добавление шума к дате"""
-        try:
-            if 'T' in str(date_str):
+    def anonymize_visit_date(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Дата посещения → Год и квартал (локальное обобщение)
+        """
+        df_copy = df.copy()
+        
+        def date_to_quarter(date_str):
+            if pd.isna(date_str):
+                return "Не указана"
+            
+            try:
                 # Парсим дату в формате ISO
-                date_obj = datetime.fromisoformat(str(date_str).replace('+03:00', ''))
-                noise_days = np.random.randint(-days, days + 1)
-                new_date = date_obj + timedelta(days=noise_days)
-                return new_date.strftime('%Y-%m-%dT%H:%M+03:00')
-            return date_str
-        except:
-            return date_str
+                if 'T' in str(date_str):
+                    date_obj = datetime.fromisoformat(str(date_str).replace('+03:00', ''))
+                    year = date_obj.year
+                    quarter = (date_obj.month - 1) // 3 + 1
+                    return f"{year}-Q{quarter}"
+            except:
+                pass
+            
+            return "Некорректная дата"
+        
+        df_copy['Дата посещения врача'] = df_copy['Дата посещения врача'].apply(date_to_quarter)
+        return df_copy
     
-    def _extract_numeric(self, text: str) -> float:
-        """Извлечение числового значения из текста"""
-        match = re.search(r'(\d+(?:\.\d+)?)', str(text))
-        if match:
-            return float(match.group(1))
-        return None
+    def anonymize_analyses(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Анализы → Количество и категория (локальное обобщение)
+        """
+        df_copy = df.copy()
+        
+        def generalize_analyses(analyses_str):
+            if pd.isna(analyses_str) or analyses_str == '':
+                return "Не назначены"
+            
+            # Подсчитываем количество анализов
+            analyses = str(analyses_str).split(',')
+            count = len(analyses)
+            
+            # Обобщаем по количеству
+            if count == 1:
+                return "Один анализ"
+            elif count == 2:
+                return "Два анализа"
+            elif count <= 4:
+                return "Несколько анализов (3-4)"
+            else:
+                return "Множественные анализы (5+)"
+        
+        df_copy['Анализы'] = df_copy['Анализы'].apply(generalize_analyses)
+        return df_copy
     
-    def _pseudonymize_card(self, card_str: str) -> str:
-        """Псевдонимизация карты"""
-        return "XXXX XXXX XXXX XXXX"
+    def anonymize_analysis_date(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Дата получения анализов → Год и месяц (локальное обобщение)
+        """
+        df_copy = df.copy()
+        
+        def date_to_month(date_str):
+            if pd.isna(date_str):
+                return "Не указана"
+            
+            try:
+                # Парсим дату в формате ISO
+                if 'T' in str(date_str):
+                    date_obj = datetime.fromisoformat(str(date_str).replace('+03:00', ''))
+                    return date_obj.strftime('%Y-%m')
+            except:
+                pass
+            
+            return "Некорректная дата"
+        
+        df_copy['Дата получения анализов'] = df_copy['Дата получения анализов'].apply(date_to_month)
+        return df_copy
     
-    def _mask_fio(self, fio: str) -> str:
-        """Маскирование ФИО"""
-        parts = fio.split()
-        if len(parts) >= 3:
-            return f"{parts[0]} {parts[1][0]}*** {parts[2][0]}***"
-        elif len(parts) == 2:
-            return f"{parts[0]} {parts[1][0]}***"
-        return fio
+    def anonymize_cost(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Стоимость → Диапазон (локальное обобщение + микро-агрегация)
+        """
+        df_copy = df.copy()
+        
+        def cost_to_range(cost_str):
+            if pd.isna(cost_str):
+                return "Не указана"
+            
+            # Извлекаем числовое значение
+            match = re.search(r'(\d+)', str(cost_str))
+            if match:
+                cost = int(match.group(1))
+                
+                # Группируем по диапазонам
+                if cost < 1000:
+                    return "До 1000 руб."
+                elif cost < 2000:
+                    return "1000-2000 руб."
+                elif cost < 3000:
+                    return "2000-3000 руб."
+                elif cost < 5000:
+                    return "3000-5000 руб."
+                elif cost < 7000:
+                    return "5000-7000 руб."
+                else:
+                    return "7000+ руб."
+            
+            return "Не указана"
+        
+        df_copy['Стоимость анализов'] = df_copy['Стоимость анализов'].apply(cost_to_range)
+        return df_copy
     
-    def _mask_snils(self, snils: str) -> str:
-        """Маскирование СНИЛС"""
-        return "XXX-XXX-XXX XX"
+    def anonymize_card(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Карта → Название банка (извлечение категории из BIN-кода)
+        """
+        df_copy = df.copy()
+        
+        def card_to_bank(card_str):
+            if pd.isna(card_str):
+                return "Не указана"
+            
+            # Извлекаем первые 6 цифр (BIN)
+            digits = re.sub(r'\D', '', str(card_str))
+            if len(digits) >= 6:
+                bin_code = digits[:6]
+                bank = self.bin_to_bank.get(bin_code, "Другой банк")
+                
+                # Переводим название банка
+                bank_names = {
+                    'sberbank': 'Сбербанк',
+                    'vtb': 'ВТБ',
+                    'alfabank': 'Альфа-Банк',
+                    'tinkoff': 'Тинькофф',
+                    'gazprombank': 'Газпромбанк',
+                    'raiffeisen': 'Райффайзенбанк'
+                }
+                
+                return bank_names.get(bank, 'Другой банк')
+            
+            return "Не указана"
+        
+        df_copy['Карта оплаты'] = df_copy['Карта оплаты'].apply(card_to_bank)
+        return df_copy
     
-    def _mask_passport(self, passport: str) -> str:
-        """Маскирование паспорта"""
-        return "XXXX XXXXXX"
-    
-    def _mask_card(self, card_str: str) -> str:
-        """Маскирование карты (оставляем первые 4 и последние 4 цифры)"""
-        digits = re.sub(r'\D', '', str(card_str))
-        if len(digits) >= 16:
-            return f"{digits[:4]} XXXX XXXX {digits[-4:]}"
-        return "XXXX XXXX XXXX XXXX"
+    def apply_anonymization(self, df: pd.DataFrame, selected_columns: List[str]) -> pd.DataFrame:
+        """
+        Применить обезличивание к выбранным столбцам
+        
+        Args:
+            df: исходный датафрейм
+            selected_columns: список столбцов для обезличивания
+            
+        Returns:
+            обезличенный датафрейм
+        """
+        df_result = df.copy()
+        
+        # Применяем предопределенные методы для каждого столбца
+        column_methods = {
+            'ФИО': self.anonymize_fio,
+            'Паспортные данные': self.anonymize_passport,
+            'СНИЛС': self.anonymize_snils,
+            'Симптомы': self.anonymize_symptoms,
+            'Выбор врача': self.anonymize_doctor,
+            'Дата посещения врача': self.anonymize_visit_date,
+            'Анализы': self.anonymize_analyses,
+            'Дата получения анализов': self.anonymize_analysis_date,
+            'Стоимость анализов': self.anonymize_cost,
+            'Карта оплаты': self.anonymize_card,
+        }
+        
+        # Применяем методы только для выбранных столбцов
+        for column in selected_columns:
+            if column in column_methods:
+                print(f"Обезличивание столбца: {column}")
+                df_result = column_methods[column](df_result)
+        
+        return df_result

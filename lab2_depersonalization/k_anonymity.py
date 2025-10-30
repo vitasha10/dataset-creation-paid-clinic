@@ -1,5 +1,6 @@
 """
-Модуль для расчета K-анонимности
+Модуль для расчета K-анонимности (переработанный)
+K-анонимность считается по ВСЕМ столбцам датасета, а не только по выбранным
 """
 import pandas as pd
 from typing import List, Dict, Tuple
@@ -13,18 +14,18 @@ class KAnonymityCalculator:
         """Инициализация калькулятора"""
         pass
     
-    def calculate_k_anonymity(self, df: pd.DataFrame, quasi_identifiers: List[str]) -> Dict:
+    def calculate_k_anonymity(self, df: pd.DataFrame) -> Dict:
         """
         Расчет K-анонимности для датасета
+        ВАЖНО: K-anonymity считается по ВСЕМ столбцам датасета
         
         Args:
             df: датафрейм
-            quasi_identifiers: список квази-идентификаторов
             
         Returns:
             словарь с результатами анализа K-анонимности
         """
-        if not quasi_identifiers:
+        if df is None or len(df) == 0:
             return {
                 'k_values': [],
                 'k_distribution': {},
@@ -32,25 +33,14 @@ class KAnonymityCalculator:
                 'max_k': None,
                 'avg_k': None,
                 'unique_combinations': 0,
-                'total_records': len(df)
+                'total_records': 0
             }
         
-        # Фильтруем только существующие столбцы
-        valid_qi = [qi for qi in quasi_identifiers if qi in df.columns]
+        # Используем ВСЕ столбцы для расчета K-anonymity
+        all_columns = df.columns.tolist()
         
-        if not valid_qi:
-            return {
-                'k_values': [],
-                'k_distribution': {},
-                'min_k': None,
-                'max_k': None,
-                'avg_k': None,
-                'unique_combinations': 0,
-                'total_records': len(df)
-            }
-        
-        # Группируем по квази-идентификаторам
-        grouped = df.groupby(valid_qi, dropna=False).size()
+        # Группируем по всем столбцам
+        grouped = df.groupby(all_columns, dropna=False).size()
         k_values = grouped.values.tolist()
         
         # Подсчитываем распределение K
@@ -71,7 +61,8 @@ class KAnonymityCalculator:
             'avg_k': avg_k,
             'unique_combinations': unique_combinations,
             'total_records': len(df),
-            'grouped': grouped
+            'grouped': grouped,
+            'columns_used': all_columns
         }
     
     def get_top_bad_k_values(self, k_analysis: Dict, top_n: int = 5) -> List[Tuple[int, int, float]]:
@@ -108,28 +99,25 @@ class KAnonymityCalculator:
         
         return result
     
-    def get_unique_rows(self, df: pd.DataFrame, quasi_identifiers: List[str]) -> pd.DataFrame:
+    def get_unique_rows(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Получить строки с K=1 (уникальные комбинации)
+        Использует ВСЕ столбцы для определения уникальности
         
         Args:
             df: датафрейм
-            quasi_identifiers: список квази-идентификаторов
             
         Returns:
             датафрейм с уникальными строками
         """
-        if not quasi_identifiers:
+        if df is None or len(df) == 0:
             return pd.DataFrame()
         
-        # Фильтруем только существующие столбцы
-        valid_qi = [qi for qi in quasi_identifiers if qi in df.columns]
-        
-        if not valid_qi:
-            return pd.DataFrame()
+        # Используем все столбцы
+        all_columns = df.columns.tolist()
         
         # Находим строки с уникальными комбинациями
-        grouped = df.groupby(valid_qi, dropna=False).size()
+        grouped = df.groupby(all_columns, dropna=False).size()
         unique_combinations = grouped[grouped == 1].index
         
         # Создаем маску для фильтрации
@@ -137,18 +125,18 @@ class KAnonymityCalculator:
         for combo in unique_combinations:
             if isinstance(combo, tuple):
                 combo_mask = pd.Series(True, index=df.index)
-                for i, qi in enumerate(valid_qi):
+                for i, col in enumerate(all_columns):
                     if pd.isna(combo[i]):
-                        combo_mask &= df[qi].isna()
+                        combo_mask &= df[col].isna()
                     else:
-                        combo_mask &= (df[qi] == combo[i])
+                        combo_mask &= (df[col] == combo[i])
                 mask |= combo_mask
             else:
                 # Одиночное значение
                 if pd.isna(combo):
-                    mask |= df[valid_qi[0]].isna()
+                    mask |= df[all_columns[0]].isna()
                 else:
-                    mask |= (df[valid_qi[0]] == combo)
+                    mask |= (df[all_columns[0]] == combo)
         
         return df[mask]
     

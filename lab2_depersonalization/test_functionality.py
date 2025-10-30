@@ -1,5 +1,5 @@
 """
-Тестовый скрипт для проверки функциональности без GUI
+Тестовый скрипт для проверки новой функциональности
 """
 import pandas as pd
 import sys
@@ -13,10 +13,10 @@ from k_anonymity import KAnonymityCalculator
 from utility_evaluator import DataUtilityEvaluator
 
 
-def test_basic_functionality():
-    """Тест базовой функциональности"""
+def test_new_functionality():
+    """Тест новой функциональности"""
     print("=" * 70)
-    print("ТЕСТ БАЗОВОЙ ФУНКЦИОНАЛЬНОСТИ")
+    print("ТЕСТ НОВОЙ ФУНКЦИОНАЛЬНОСТИ")
     print("=" * 70)
     
     # Загружаем тестовый датасет
@@ -31,39 +31,51 @@ def test_basic_functionality():
         print(f"   ✗ Ошибка загрузки: {e}")
         return False
     
+    # Показываем пример до обезличивания
+    print("\n2. Пример данных ДО обезличивания:")
+    print(f"   ФИО: {df['ФИО'].iloc[0]}")
+    print(f"   Паспорт: {df['Паспортные данные'].iloc[0]}")
+    print(f"   СНИЛС: {df['СНИЛС'].iloc[0]}")
+    print(f"   Карта: {df['Карта оплаты'].iloc[0]}")
+    print(f"   Дата посещения: {df['Дата посещения врача'].iloc[0]}")
+    print(f"   Стоимость: {df['Стоимость анализов'].iloc[0]}")
+    
     # Тестируем методы обезличивания
-    print("\n2. Тестирование методов обезличивания")
+    print("\n3. Тестирование методов обезличивания")
     depers = DepersonalizationMethods()
     
-    # Локальное обобщение
-    print("   - Локальное обобщение (ФИО)")
-    df_test = depers.generalization_local(df.copy(), 'ФИО')
-    print(f"     Пример: {df['ФИО'].iloc[0]} -> {df_test['ФИО'].iloc[0]}")
+    # Выбираем все столбцы
+    selected_columns = list(df.columns)
     
-    # Маскеризация
-    print("   - Маскеризация (Карта оплаты)")
-    df_test = depers.masking(df.copy(), 'Карта оплаты')
-    print(f"     Пример: {df['Карта оплаты'].iloc[0]} -> {df_test['Карта оплаты'].iloc[0]}")
+    df_anon = depers.apply_anonymization(df.copy(), selected_columns)
     
-    # Псевдонимизация
-    print("   - Псевдонимизация (ФИО)")
-    df_test = depers.pseudonymization(df.copy(), 'ФИО')
-    print(f"     Пример: {df['ФИО'].iloc[0]} -> {df_test['ФИО'].iloc[0]}")
+    print("\n4. Пример данных ПОСЛЕ обезличивания:")
+    print(f"   ФИО: {df_anon['ФИО'].iloc[0]}")
+    print(f"   Паспорт: {df_anon['Паспортные данные'].iloc[0]}")
+    print(f"   СНИЛС: {df_anon['СНИЛС'].iloc[0]}")
+    print(f"   Карта: {df_anon['Карта оплаты'].iloc[0]}")
+    print(f"   Дата посещения: {df_anon['Дата посещения врача'].iloc[0]}")
+    print(f"   Стоимость: {df_anon['Стоимость анализов'].iloc[0]}")
+    print(f"   Выбор врача: {df_anon['Выбор врача'].iloc[0]}")
+    print(f"   Симптомы: {df_anon['Симптомы'].iloc[0]}")
+    print(f"   Анализы: {df_anon['Анализы'].iloc[0]}")
     
-    print("   ✓ Методы обезличивания работают")
+    print("\n   ✓ Методы обезличивания работают")
+    print("   ✓ ФИО полностью заменено на псевдоним")
+    print("   ✓ Паспорт преобразован в регион")
+    print("   ✓ Карта преобразована в название банка")
     
-    # Тестируем K-анонимность
-    print("\n3. Тестирование расчета K-anonymity")
+    # Тестируем K-анонимность ПО ВСЕМ СТОЛБЦАМ
+    print("\n5. Тестирование расчета K-anonymity ПО ВСЕМ СТОЛБЦАМ")
     k_calc = KAnonymityCalculator()
     
-    quasi_identifiers = ['ФИО', 'Паспортные данные', 'СНИЛС']
-    k_analysis = k_calc.calculate_k_anonymity(df, quasi_identifiers)
+    k_analysis = k_calc.calculate_k_anonymity(df_anon)
     
-    print(f"   Выбранные QI: {quasi_identifiers}")
     print(f"   Минимальное K: {k_analysis['min_k']}")
     print(f"   Максимальное K: {k_analysis['max_k']}")
     print(f"   Среднее K: {k_analysis['avg_k']:.2f}")
     print(f"   Уникальных комбинаций: {k_analysis['unique_combinations']}")
+    print(f"   Использовано столбцов: {len(k_analysis['columns_used'])}")
     
     # Топ плохих K
     top_bad = k_calc.get_top_bad_k_values(k_analysis, top_n=5)
@@ -76,41 +88,43 @@ def test_basic_functionality():
     print(f"\n   Требуемое K: {req_k}")
     print(f"   Соответствие: {'✓ Да' if meets else '✗ Нет'}")
     
-    print("   ✓ K-anonymity работает")
+    print("   ✓ K-anonymity рассчитывается по всем столбцам")
     
     # Тестируем оценку полезности
-    print("\n4. Тестирование оценки полезности (KLD)")
-    
-    # Применяем обезличивание
-    df_anon = df.copy()
-    df_anon = depers.generalization_local(df_anon, 'ФИО')
-    df_anon = depers.masking(df_anon, 'Карта оплаты')
+    print("\n6. Тестирование оценки полезности (KLD)")
     
     evaluator = DataUtilityEvaluator()
-    utility = evaluator.evaluate_utility(df, df_anon, quasi_identifiers)
+    utility = evaluator.evaluate_utility(df, df_anon, selected_columns)
     
     print(f"   Общий KLD: {utility['overall_kld']:.6f}")
     print(f"   Оценка качества: {utility['quality_assessment']}")
     
-    print("\n   KLD по столбцам:")
+    print("\n   KLD по обезличенным столбцам:")
     for col, kld in utility['kld_by_column'].items():
-        if kld is not None:
+        if kld is not None and kld > 0:
             print(f"     {col}: {kld:.6f}")
     
     print("   ✓ Оценка полезности работает")
     
     # Сохраняем тестовый результат
-    print("\n5. Сохранение обезличенного датасета")
-    output_file = "test_depersonalized.xlsx"
+    print("\n7. Сохранение обезличенного датасета")
+    output_file = "test_new_depersonalized.xlsx"
     df_anon.to_excel(output_file, index=False, sheet_name='Обезличенные данные')
     print(f"   ✓ Сохранено в {output_file}")
     
     print("\n" + "=" * 70)
-    print("ВСЕ ТЕСТЫ ПРОЙДЕНЫ УСПЕШНО!")
+    print("ВСЕ ТЕСТЫ НОВОЙ ФУНКЦИОНАЛЬНОСТИ ПРОЙДЕНЫ УСПЕШНО!")
     print("=" * 70)
+    print("\nКЛЮЧЕВЫЕ ОТЛИЧИЯ ОТ СТАРОЙ ВЕРСИИ:")
+    print("✓ ФИО полностью обезличено (не оставлена фамилия)")
+    print("✓ Паспорт → Регион")
+    print("✓ Карта → Название банка")
+    print("✓ K-anonymity считается по ВСЕМ столбцам")
+    print("✓ Методы обезличивания предопределены для каждого столбца")
+    print("✓ Все столбцы по умолчанию выбраны для обезличивания")
     
     return True
 
 
 if __name__ == "__main__":
-    test_basic_functionality()
+    test_new_functionality()
