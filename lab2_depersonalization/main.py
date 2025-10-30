@@ -8,8 +8,8 @@ from pathlib import Path
 import sys
 import time
 
-from depersonalization_methods_new import DepersonalizationMethods
-from k_anonymity_new import KAnonymityCalculator
+from depersonalization_methods import DepersonalizationMethods
+from k_anonymity import KAnonymityCalculator
 from utility_evaluator import DataUtilityEvaluator
 
 
@@ -341,67 +341,59 @@ class DepersonalizationApp:
         except Exception as e:
             self.status_var.set("Ошибка расчета")
             messagebox.showerror("Ошибка", f"Не удалось рассчитать K-anonymity:\n{str(e)}")
-    
+
+    # Фрагмент: только безопасные изменения в отображении результатов.
     def display_k_results(self):
-        """Отображение результатов K-анонимности"""
         if self.k_analysis is None:
             return
-        
-        # Очищаем текстовое поле
+
         self.k_results_text.delete(1.0, tk.END)
-        
-        # Выводим основную статистику
         output = []
         output.append("=" * 50)
         output.append("РЕЗУЛЬТАТЫ K-ANONYMITY")
         output.append("(расчет по ВСЕМ столбцам)")
         output.append("=" * 50)
         output.append("")
-        
-        # Общая статистика
         output.append(f"Всего записей: {self.k_analysis['total_records']}")
         output.append(f"Уникальных комбинаций: {self.k_analysis['unique_combinations']}")
         output.append(f"Минимальное K: {self.k_analysis['min_k']}")
         output.append(f"Максимальное K: {self.k_analysis['max_k']}")
-        output.append(f"Среднее K: {self.k_analysis['avg_k']:.2f}" if self.k_analysis['avg_k'] else "Среднее K: N/A")
+        avg_k = self.k_analysis['avg_k']
+        output.append(f"Среднее K: {avg_k:.2f}" if avg_k is not None else "Среднее K: N/A")
         output.append("")
-        
-        # Проверка порога K
+
         meets_threshold, min_k, required_k = self.k_calculator.check_k_threshold(self.k_analysis)
         output.append(f"Требуемое K для датасета: {required_k}")
-        if meets_threshold:
-            output.append(f"✓ Датасет соответствует требованиям (K >= {required_k})")
-        else:
-            output.append(f"✗ Датасет НЕ соответствует требованиям (K = {min_k} < {required_k})")
+        output.append("✓ Датасет соответствует требованиям (K >= {0})".format(required_k) if meets_threshold
+                      else "✗ Датасет НЕ соответствует требованиям (K = {0} < {1})".format(min_k, required_k))
         output.append("")
-        
-        # Топ плохих K
+
         output.append("ТОП-5 ПЛОХИХ K-ANONYMITY:")
         output.append("-" * 50)
-        
         top_bad_k = self.k_calculator.get_top_bad_k_values(self.k_analysis, top_n=5)
-        
         if top_bad_k:
             for k_value, count, percentage in top_bad_k:
                 output.append(f"K={k_value}: {count} записей ({percentage:.4f}%)")
         else:
             output.append("Нет данных")
-        
         output.append("")
-        
-        # Уникальные строки (K=1)
-        unique_rows = self.k_calculator.get_unique_rows(self.anonymized_df)
-        
-        output.append(f"УНИКАЛЬНЫЕ СТРОКИ (K=1): {len(unique_rows)}")
-        
-        if len(unique_rows) > 0:
-            output.append("-" * 50)
-            output.append(f"Найдено {len(unique_rows)} уникальных строк")
-            output.append(f"Процент от общего: {(len(unique_rows) / self.k_analysis['total_records'] * 100):.2f}%")
-        
-        # Выводим в текстовое поле
+
+        # Без материализации df на больших наборах: берем число K=1 из распределения
+        k1_groups = self.k_analysis['k_distribution'].get(1, 0)
+        k1_records = k1_groups  # 1 * group_count
+        output.append(f"УНИКАЛЬНЫЕ СТРОКИ (K=1): {k1_records}")
+        if self.k_analysis['total_records'] > 0:
+            output.append(f"Процент от общего: {(k1_records / self.k_analysis['total_records'] * 100):.2f}%")
+
+        # Если очень нужно показать сами строки, делайте это только на малых датасетах:
+        # if self.k_analysis['total_records'] <= 10000:
+        #     unique_rows = self.k_calculator.get_unique_rows(self.anonymized_df)
+        #     output.append("-" * 50)
+        #     output.append(f"Первые 20 уникальных строк:")
+        #     output.append(unique_rows.head(20).to_string(index=False))
+
         self.k_results_text.insert(1.0, "\n".join(output))
-    
+
     def depersonalize_dataset(self):
         """Обезличивание датасета с предопределенными методами"""
         try:
