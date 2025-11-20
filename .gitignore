@@ -212,3 +212,7 @@ test_*.xlsx
 test_*_report.txt
 column_check*.xlsx
 column_check*_report.txt
+
+# Lab 2 generated files
+lab2_depersonalization/*.xlsx
+lab2_depersonalization/__pycache__/
